@@ -34,6 +34,7 @@ DoD2k distinguishes **archive** (`archiveType`, e.g. Speleothem) from **measurem
 library(tidyverse)
 library(glue)
 library(plotly)
+library(terra)
 ```
 
 # Load DoD2k data
@@ -461,4 +462,517 @@ plot_speleothem_resolution <- function(sites) {
 #| dependson: speleothem-summary
 
 plot_speleothem_resolution(speleo_sites)
+```
+
+# Instrumental correlation screening
+
+Do speleothem proxies covary with local climate? We extract **CRU TS v4.07** temperature and precipitation from the nearest 0.5° grid cell (same idea as Exercise 11/12 with CRUTEM) and correlate each series with:
+
+- annual mean temperature
+- JJA mean temperature
+- annual precipitation total
+
+Overlap window: **1901–2000 CE**, minimum **10** paired years. This is a first-order screening — speleothem signals depend on region, season, and proxy type (δ18O can track rain amount or temperature).
+
+First run downloads CRU TS (~400 MB compressed) to `output/cache/cru_ts/` and caches extracted site climate.
+
+## CRU grid extraction
+
+```{r}
+#| label: cru-setup
+#| code-fold: true
+
+cru_dir  <- file.path(cache_dir, "cru_ts")
+cru_base <- "https://crudata.uea.ac.uk/cru/data/hrg/cru_ts_4.07/cruts.2304141047.v4.07"
+cru_years <- 1901:2022
+cru_rds   <- file.path(cache_dir, "cru_site_climate.rds")
+dir.create(cru_dir, recursive = TRUE, showWarnings = FALSE)
+
+#' Download and decompress one CRU TS variable if needed.
+#'
+#' @param var `"tmp"` or `"pre"`.
+#' @return Path to the uncompressed NetCDF file.
+ensure_cru_nc <- function(var) {
+  fname <- paste0("cru_ts4.07.1901.2022.", var, ".dat.nc")
+  nc_path <- file.path(cru_dir, fname)
+  gz_path <- paste0(nc_path, ".gz")
+  if (!file.exists(nc_path)) {
+    if (!file.exists(gz_path)) {
+      message("Downloading CRU TS ", var, " …")
+      url <- paste(cru_base, var, paste0(fname, ".gz"), sep = "/")
+      if (nzchar(Sys.which("curl"))) {
+        status <- system2("curl", c("-L", "-C", "-", "--retry", "3", "--max-time", "900", "-o", gz_path, url))
+        if (status != 0) stop("CRU download failed for ", var)
+      } else {
+        utils::download.file(url, gz_path, mode = "wb", timeout = 900)
+      }
+    }
+    message("Decompressing ", basename(gz_path), " …")
+    status <- system2("gunzip", c("-k", "-f", gz_path))
+    if (status != 0) stop("gunzip failed — decompress ", gz_path, " manually")
+  }
+  nc_path
+}
+
+#' Aggregate monthly CRU matrices to annual temperature means and precipitation sums.
+cru_monthly_to_annual <- function(mat_tmp, mat_pre, years = cru_years) {
+  n_pt <- nrow(mat_tmp)
+  n_yr <- length(years)
+  tmp_ann <- tmp_jja <- pre_ann <- matrix(NA_real_, n_pt, n_yr)
+  for (j in seq_len(n_yr)) {
+    m <- (j - 1L) * 12L + 1:12
+    tmp_ann[, j] <- rowMeans(mat_tmp[, m, drop = FALSE], na.rm = TRUE)
+    tmp_jja[, j] <- rowMeans(mat_tmp[, m[6:8], drop = FALSE], na.rm = TRUE)
+    pre_ann[, j] <- rowSums(mat_pre[, m, drop = FALSE], na.rm = TRUE)
+  }
+  list(tmp_ann = tmp_ann, tmp_jja = tmp_jja, pre_ann = pre_ann)
+}
+
+#' Extract CRU TS climate at speleothem locations (cached as RDS).
+#'
+#' @param loc Tibble with `loc_id`, `lon`, `lat`.
+#' @param refresh Rebuild even when RDS exists.
+#' @return Long tibble: `loc_id`, `lon`, `lat`, `year`, `tmp_ann`, `tmp_jja`, `pre_ann`.
+load_cru_site_climate <- function(loc, refresh = FALSE) {
+  if (!refresh && file.exists(cru_rds)) return(readRDS(cru_rds))
+
+  pts <- vect(loc, geom = c("lon", "lat"), crs = "EPSG:4326")
+  tmp_nc <- ensure_cru_nc("tmp")
+  pre_nc <- ensure_cru_nc("pre")
+
+  mat_tmp <- as.matrix(
+    terra::extract(rast(tmp_nc, subds = "tmp"), pts, method = "simple")[, -1]
+  )
+  mat_pre <- as.matrix(
+    terra::extract(rast(pre_nc, subds = "pre"), pts, method = "simple")[, -1]
+  )
+  ann <- cru_monthly_to_annual(mat_tmp, mat_pre)
+
+  clim <- map_dfr(seq_len(nrow(loc)), \(i) {
+    tibble(
+      loc_id = loc$loc_id[i], lon = loc$lon[i], lat = loc$lat[i],
+      year = cru_years,
+      tmp_ann = ann$tmp_ann[i, ], tmp_jja = ann$tmp_jja[i, ], pre_ann = ann$pre_ann[i, ]
+    )
+  })
+  saveRDS(clim, cru_rds)
+  clim
+}
+```
+
+## Correlation functions
+
+Pearson correlation with two-tailed p-value; series with fewer than 10 overlap years are skipped.
+
+```{r}
+#| label: corr-setup
+#| code-fold: true
+
+instr_y0 <- 1901L
+instr_y1 <- 2000L
+min_overlap <- 10L
+
+climate_vars <- c(
+  r_tmp_ann = "Temperature (annual)",
+  r_tmp_jja = "Temperature (JJA)",
+  r_pre_ann = "Precipitation (annual)"
+)
+
+#' Correlate one proxy series with one climate variable.
+corr_series <- function(proxy_df, clim_df, clim_col,
+                        y0 = instr_y0, y1 = instr_y1, min_n = min_overlap) {
+  d <- proxy_df |>
+    filter(year >= y0, year <= y1) |>
+    inner_join(clim_df, by = "year")
+  ok <- is.finite(d$value) & is.finite(d[[clim_col]])
+  d <- d[ok, , drop = FALSE]
+  if (nrow(d) < min_n) {
+    return(tibble(r = NA_real_, p = NA_real_, n = nrow(d)))
+  }
+  ct <- cor.test(d$value, d[[clim_col]], method = "pearson")
+  tibble(r = unname(ct$estimate), p = ct$p.value, n = nrow(d))
+}
+
+#' Build annual speleothem series (mean if multiple values per year).
+speleothem_annual <- function(catalog) {
+  catalog |>
+    filter(archive_type == "Speleothem") |>
+    group_by(dataset_id, proxy_type, lon, lat, year) |>
+    summarize(value = mean(value), .groups = "drop")
+}
+
+#' Correlate all speleothem series with local CRU grid-box climate.
+compute_speleo_correlations <- function(catalog, clim, sites,
+                                        y0 = instr_y0, y1 = instr_y1) {
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |> inner_join(loc, by = c("lon", "lat"))
+
+  res <- map_dfr(group_split(proxy_ann, dataset_id), function(df) {
+    cdf <- clim |> filter(loc_id == df$loc_id[1])
+    t1 <- corr_series(df, cdf, "tmp_ann", y0, y1)
+    t2 <- corr_series(df, cdf, "tmp_jja", y0, y1)
+    t3 <- corr_series(df, cdf, "pre_ann", y0, y1)
+    tibble(
+      dataset_id = df$dataset_id[1],
+      proxy_type = df$proxy_type[1],
+      lon = df$lon[1], lat = df$lat[1],
+      n_overlap = t1$n,
+      r_tmp_ann = t1$r, p_tmp_ann = t1$p,
+      r_tmp_jja = t2$r, p_tmp_jja = t2$p,
+      r_pre_ann = t3$r, p_pre_ann = t3$p
+    )
+  })
+
+  res |>
+    rowwise() |>
+    mutate(
+      best_var = {
+        rs <- c(tmp_ann = r_tmp_ann, tmp_jja = r_tmp_jja, pre_ann = r_pre_ann)
+        if (all(is.na(rs))) NA_character_ else names(rs)[which.max(abs(rs))]
+      },
+      best_r = {
+        rs <- c(r_tmp_ann, r_tmp_jja, r_pre_ann)
+        if (all(is.na(rs))) NA_real_ else rs[which.max(abs(rs))]
+      }
+    ) |>
+    ungroup()
+}
+
+#' Add display labels to correlation results.
+enrich_correlations <- function(corr) {
+  corr |>
+    mutate(
+      proxy_type = factor(proxy_type, levels = proxy_order),
+      proxy_label = proxy_labels[as.character(proxy_type)],
+      best_var_label = recode(
+        best_var,
+        tmp_ann = "Temperature (annual)",
+        tmp_jja = "Temperature (JJA)",
+        pre_ann = "Precipitation (annual)",
+        .default = NA_character_
+      )
+    )
+}
+```
+
+## All stations
+
+```{r}
+#| label: corr-run
+#| cache: true
+#| dependson: speleothem-summary
+
+corr_rds <- file.path(cache_dir, "speleo_instrument_correlations.rds")
+cru_locs <- speleo_sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+
+if (file.exists(corr_rds) && file.exists(cru_rds)) {
+  speleo_corr <- enrich_correlations(readRDS(corr_rds))
+} else {
+  cru_clim <- load_cru_site_climate(cru_locs)
+  speleo_corr <- enrich_correlations(compute_speleo_correlations(catalog, cru_clim, speleo_sites))
+  saveRDS(speleo_corr, corr_rds)
+}
+
+n_tested <- sum(is.finite(speleo_corr$best_r))
+n_sig <- speleo_corr |>
+  transmute(sig = p_tmp_ann < 0.05 | p_tmp_jja < 0.05 | p_pre_ann < 0.05) |>
+  pull(sig) |>
+  sum(na.rm = TRUE)
+glue(
+  "Series tested (≥{min_overlap} overlap years, {instr_y0}–{instr_y1}): {n_tested}  |  ",
+  "Significant (p < 0.05, any variable): {n_sig}"
+)
+```
+
+```{r}
+#| label: corr-summary-table
+#| dependson: corr-run
+
+speleo_corr |>
+  filter(is.finite(r_tmp_ann) | is.finite(r_pre_ann)) |>
+  group_by(proxy_type) |>
+  summarize(
+    n = n(),
+    median_r_tmp = median(r_tmp_ann, na.rm = TRUE),
+    median_r_pre = median(r_pre_ann, na.rm = TRUE),
+    sig_tmp = sum(p_tmp_ann < 0.05, na.rm = TRUE),
+    sig_pre = sum(p_pre_ann < 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(proxy_label = proxy_labels[as.character(proxy_type)]) |>
+  transmute(
+    proxy_label, n, median_r_tmp, median_r_pre, sig_tmp, sig_pre
+  ) |>
+  knitr::kable(
+    digits = 3,
+    caption = paste0("Local CRU correlations by proxy type (", instr_y0, "–", instr_y1, ")")
+  )
+```
+
+Distribution of correlation coefficients across all series — weak median correlations are typical for heterogeneous archives (cf. Exercise 12).
+
+```{r}
+#| label: corr-histogram-fn
+#| code-fold: true
+
+#' Histogram of correlation coefficients, faceted by climate variable.
+plot_correlation_histogram <- function(corr) {
+  long <- corr |>
+    filter(is.finite(r_tmp_ann) | is.finite(r_tmp_jja) | is.finite(r_pre_ann)) |>
+    pivot_longer(
+      c(r_tmp_ann, r_tmp_jja, r_pre_ann),
+      names_to = "climate", values_to = "r"
+    ) |>
+    mutate(
+      climate = factor(climate, levels = names(climate_vars), labels = climate_vars),
+      proxy_type = factor(proxy_type, levels = proxy_order)
+    )
+
+  ggplot(long, aes(r, fill = proxy_type)) +
+    geom_histogram(bins = 30, alpha = 0.75, position = "identity") +
+    facet_wrap(~climate, ncol = 1, scales = "free_y") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+    scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
+    labs(
+      title = "Proxy–climate correlations (all speleothem series)",
+      subtitle = paste0("Nearest CRU TS grid cell, ", instr_y0, "–", instr_y1),
+      x = "Pearson r", y = "Count"
+    ) +
+    theme_clean()
+}
+```
+
+```{r}
+#| label: corr-histogram
+#| fig-cap: "Distribution of correlation coefficients"
+#| dependson: [corr-run, corr-histogram-fn]
+
+plot_correlation_histogram(speleo_corr)
+```
+
+## By proxy type
+
+Compare temperature vs. precipitation fit and count significant correlations (p < 0.05).
+
+```{r}
+#| label: corr-by-type-fn
+#| code-fold: true
+
+#' Boxplot of correlations by proxy type and climate variable.
+plot_correlation_by_type <- function(corr) {
+  long <- corr |>
+    pivot_longer(
+      c(r_tmp_ann, r_tmp_jja, r_pre_ann),
+      names_to = "climate", values_to = "r"
+    ) |>
+    mutate(
+      climate = factor(climate, levels = names(climate_vars), labels = climate_vars),
+      proxy_type = factor(proxy_type, levels = proxy_order)
+    )
+
+  ggplot(long, aes(proxy_type, r, fill = proxy_type)) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey60") +
+    geom_boxplot(outlier.size = 0.7, alpha = 0.85) +
+    facet_wrap(~climate, ncol = 1) +
+    scale_fill_manual(values = proxy_colors, guide = "none") +
+    scale_x_discrete(labels = proxy_labels[proxy_order]) +
+    labs(
+      title = "Correlation by proxy type",
+      x = NULL, y = "Pearson r"
+    ) +
+    theme_clean()
+}
+
+#' Count significant correlations (p < 0.05) by proxy type and climate variable.
+plot_significance_counts <- function(corr) {
+  sig <- corr |>
+    transmute(
+      proxy_type,
+      tmp_ann = p_tmp_ann < 0.05,
+      tmp_jja = p_tmp_jja < 0.05,
+      pre_ann = p_pre_ann < 0.05
+    ) |>
+    pivot_longer(-proxy_type, names_to = "climate", values_to = "sig") |>
+    filter(!is.na(sig)) |>
+    group_by(proxy_type, climate) |>
+    summarize(n_sig = sum(sig), .groups = "drop") |>
+    mutate(
+      climate = factor(climate, levels = names(climate_vars), labels = climate_vars),
+      proxy_type = factor(proxy_type, levels = proxy_order)
+    )
+
+  ggplot(sig, aes(climate, n_sig, fill = proxy_type)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+    scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
+    labs(
+      title = "Significant correlations (p < 0.05)",
+      x = NULL, y = "Number of series"
+    ) +
+    theme_clean()
+}
+```
+
+```{r}
+#| label: corr-by-type
+#| fig-cap: "Correlations and significance by proxy type"
+#| dependson: [corr-run, corr-by-type-fn]
+
+plot_correlation_by_type(speleo_corr)
+```
+
+```{r}
+#| label: corr-significance
+#| dependson: [corr-run, corr-by-type-fn]
+
+plot_significance_counts(speleo_corr)
+```
+
+## Best-fit climate variable
+
+For each series, which of the three climate targets has the highest |r|?
+
+```{r}
+#| label: corr-best-var-fn
+#| code-fold: true
+
+plot_best_variable_counts <- function(corr) {
+  best <- corr |>
+    filter(!is.na(best_var)) |>
+    count(proxy_type, best_var_label, name = "n") |>
+    mutate(proxy_type = factor(proxy_type, levels = proxy_order))
+
+  ggplot(best, aes(best_var_label, n, fill = proxy_type)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+    scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
+    labs(
+      title = "Strongest |r| per series",
+      subtitle = "Which climate variable fits best?",
+      x = NULL, y = "Number of series"
+    ) +
+    theme_clean() +
+    theme(axis.text.x = element_text(angle = 20, hjust = 1))
+}
+```
+
+```{r}
+#| label: corr-best-var
+#| dependson: [corr-run, corr-best-var-fn]
+
+plot_best_variable_counts(speleo_corr)
+```
+
+## Correlation map
+
+Points coloured by the strongest local correlation (signed).
+
+```{r}
+#| label: corr-map-fn
+#| code-fold: true
+
+#' Map speleothem sites coloured by best correlation with CRU climate.
+plot_correlation_map <- function(corr) {
+  map_df <- corr |>
+    filter(is.finite(best_r)) |>
+    left_join(
+      speleo_sites |> select(dataset_id, site),
+      by = "dataset_id"
+    ) |>
+    mutate(
+      hover = paste0(
+        "<b>", site, "</b><br>", dataset_id, "<br>",
+        proxy_labels[as.character(proxy_type)], "<br>",
+        "Best: ", best_var_label, "<br>",
+        "r = ", round(best_r, 3), " (n = ", n_overlap, ")"
+      )
+    )
+
+  map_df |>
+    plot_ly(
+      type = "scattergeo", mode = "markers",
+      lon = ~lon, lat = ~lat, text = ~hover, hoverinfo = "text",
+      color = ~best_r, colors = c("#2166ac", "#f7f7f7", "#b2182b"),
+      marker = list(size = 7, line = list(width = 0.4, color = "#333"))
+    ) |>
+    layout(
+      title = list(
+        text = paste0("<b>Best proxy–climate correlation</b><br><sup>CRU TS, ", instr_y0, "–", instr_y1, "</sup>"),
+        x = 0.5, xanchor = "center"
+      ),
+      geo = list(
+        projection = list(type = "natural earth"),
+        showland = TRUE, landcolor = "#f0f0f0",
+        showocean = TRUE, oceancolor = "#e6f2fa",
+        showcountries = TRUE, countrycolor = "#bbbbbb"
+      )
+    )
+}
+```
+
+```{r}
+#| label: corr-map
+#| dependson: [corr-run, corr-map-fn, speleothem-summary]
+
+plot_correlation_map(speleo_corr)
+```
+
+## Example fits
+
+One well-correlated series per proxy type — proxy vs. climate scatter for the variable with highest |r|.
+
+```{r}
+#| label: corr-examples-fn
+#| code-fold: true
+
+#' Scatter plots for the best-correlated series per proxy type.
+plot_correlation_examples <- function(corr, catalog, clim) {
+  loc <- speleo_sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |> inner_join(loc, by = c("lon", "lat"))
+
+  picks <- corr |>
+    filter(is.finite(best_r)) |>
+    group_by(proxy_type) |>
+    slice_max(abs(best_r), n = 1, with_ties = FALSE) |>
+    ungroup()
+
+  clim_col <- c(tmp_ann = "tmp_ann", tmp_jja = "tmp_jja", pre_ann = "pre_ann")
+
+  examples <- map_dfr(seq_len(nrow(picks)), function(i) {
+    row <- picks[i, ]
+    px <- proxy_ann |> filter(dataset_id == row$dataset_id)
+    cd <- clim |>
+      filter(loc_id == px$loc_id[1]) |>
+      select(year, climate = all_of(clim_col[[row$best_var]]))
+    px |>
+      filter(year >= instr_y0, year <= instr_y1) |>
+      inner_join(cd, by = "year") |>
+      mutate(
+        dataset_id = row$dataset_id,
+        proxy_label = proxy_labels[as.character(row$proxy_type)],
+        climate_label = row$best_var_label,
+        r = row$best_r
+      )
+  })
+
+  ggplot(examples, aes(climate, value)) +
+    geom_point(alpha = 0.55, size = 1.5, colour = "#444444") +
+    geom_smooth(method = "lm", se = TRUE, colour = "#b2182b", linewidth = 0.8) +
+    facet_wrap(~paste0(proxy_label, " — ", dataset_id, "\nr = ", round(r, 2)),
+               scales = "free", ncol = 2) +
+    labs(
+      title = "Best local fits per proxy type",
+      subtitle = paste0("CRU TS grid box, ", instr_y0, "–", instr_y1),
+      x = "Climate (CRU TS)", y = "Proxy value"
+    ) +
+    theme_clean() +
+    theme(strip.text = element_text(size = 8))
+}
+```
+
+```{r}
+#| label: corr-examples
+#| fig-cap: "Example proxy–climate scatter plots"
+#| dependson: corr-run
+
+if (!exists("cru_clim")) cru_clim <- readRDS(cru_rds)
+plot_correlation_examples(speleo_corr, catalog, cru_clim)
 ```
