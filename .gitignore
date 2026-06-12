@@ -8,6 +8,10 @@
 # Local R library (optional vendored packages)
 R_libs/
 
+# Python venv & cloned DoD2k toolkit (see scripts/setup_dod2k_repo.sh)
+proxy-cfr-comparison/.venv/
+external/
+
 # OS / editor
 .DS_Store
 .cursor/

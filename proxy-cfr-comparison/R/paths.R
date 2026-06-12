@@ -2,29 +2,7 @@
 
 #' Locate the proxy-cfr-comparison project root (`config/experiments.R`)
 find_project_root <- function() {
-  env_root <- Sys.getenv("PROXY_CFR_PROJECT_ROOT", unset = "")
-  if (nzchar(env_root)) {
-    root <- normalizePath(env_root, mustWork = FALSE)
-    if (file.exists(file.path(root, "config", "experiments.R"))) {
-      return(root)
-    }
-  }
-
-  candidates <- c(
-    getwd(),
-    normalizePath(file.path(getwd(), ".."), mustWork = FALSE),
-    normalizePath(file.path(getwd(), "..", ".."), mustWork = FALSE)
-  )
-  for (path in unique(candidates[nzchar(candidates)])) {
-    if (file.exists(file.path(path, "config", "experiments.R"))) {
-      return(normalizePath(path))
-    }
-  }
-
-  stop(
-    "Cannot find proxy-cfr-comparison project root. ",
-    "Set PROXY_CFR_PROJECT_ROOT or run Quarto from the project directory."
-  )
+  locate_project_root()
 }
 
 #' Locate repository root (contains `course/data` and `proxy-cfr-comparison/`)
@@ -61,6 +39,7 @@ project_paths <- function() {
     data_dir = file.path(repo, "course", "data"),
     exercises_dir = file.path(repo, "course", "exercises"),
     output_dir = file.path(project_root, "output"),
+    cache_dir = file.path(project_root, "output", "cache"),
     cfr_output_dir = file.path(project_root, "output", "cfr"),
     tables_dir = file.path(project_root, "output", "tables"),
     figures_dir = file.path(project_root, "output", "figures")
@@ -70,7 +49,7 @@ project_paths <- function() {
 #' Create output directories if missing
 ensure_output_dirs <- function(paths = project_paths()) {
   invisible(vapply(
-    paths[c("output_dir", "cfr_output_dir", "tables_dir", "figures_dir")],
+    paths[c("output_dir", "cache_dir", "cfr_output_dir", "tables_dir", "figures_dir")],
     function(d) dir.create(d, recursive = TRUE, showWarnings = FALSE),
     logical(1)
   ))

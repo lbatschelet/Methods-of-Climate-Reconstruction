@@ -6,3 +6,5 @@ output/
 
 /.quarto/
 **/*.quarto_ipynb
+_environment
+.venv/

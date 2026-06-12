@@ -1,42 +1,37 @@
 # Proxy CFR Comparison
 
-Single **Quarto notebook** (`analysis.qmd`) for exploring and comparing CFR experiments.  
-Course data and exercises live in **`../course/`**.
+Single Quarto notebook (`analysis.qmd`): native **`{python}`** and **`{r}`** chunks.
 
-## Workflow (like Jupyter)
+| Language | Role |
+|----------|------|
+| **Python** | Load/filter DoD2k ([official toolkit](https://lluecke.github.io/dod2k/)) |
+| **R** (tidyverse) | CFR, validation, ggplot |
 
-1. Open `analysis.qmd` in RStudio, VS Code, or Positron.
-2. Run chunks interactively as you work.
-3. Render when you want the HTML report:
+Python writes `output/cache/dod2k_timeseries.parquet`; R reads it with **arrow**. No `reticulate` bridge inside the R modules.
+
+## Setup
 
 ```bash
 cd proxy-cfr-comparison
-quarto preview analysis.qmd   # live preview while editing
-quarto render analysis.qmd    # write output/analysis.html
+bash scripts/setup_python.sh          # .venv + Jupyter kernel dod2k-cfr
+bash scripts/setup_dod2k_repo.sh      # optional: dod2k_utilities
+Rscript -e "install.packages('arrow', repos='https://cloud.r-project.org')"
 ```
 
-In RStudio: use **Run** on chunks and the **Render** button.
+R packages: **tidyverse**, **arrow**, **ggplot2**, **ncdf4**, **glue**, plus CFR deps (`foreach`, `doParallel`, `mvnfast`).
 
-## Parameters
-
-Edit the YAML header in `analysis.qmd`:
-
-| Param | Default | Meaning |
-|-------|---------|---------|
-| `quick_run` | `true` | 3 experiments; `false` = full batch |
-| `overwrite_cfr` | `false` | Re-run CFR even if cached |
-
-## R modules
-
-Reusable code stays in `R/` and `config/` — the notebook sources them via `load_project()`.
+Quarto uses kernel **`dod2k-cfr`** and `QUARTO_PYTHON` from `_environment` — no manual Python picker needed.
 
 ```r
 source("R/load_project.R")
-load_project()
-run_cfr_experiment("dod2k_speleothems", "course_split")
+load_project()   # loads tidyverse via analysis.qmd setup chunk
 ```
 
-## Requirements
+## Render
 
-R: `ggplot2`, `ncdf4`, `foreach`, `doParallel`, `mvnfast`  
-[Quarto](https://quarto.org/)
+```bash
+bash scripts/render.sh          # sets QUARTO_PYTHON to .venv (recommended)
+quarto preview analysis.qmd     # or preview in IDE after setup_python.sh
+```
+
+Run chunks top-to-bottom: **setup-r** → **dod2k-load** (Python) → R sections.
