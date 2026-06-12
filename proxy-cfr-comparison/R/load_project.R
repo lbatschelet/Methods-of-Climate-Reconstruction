@@ -1,34 +1,51 @@
-# Load project configuration and all R modules
+# Load project modules and dependencies
 
-load_project <- function(project_root = NULL) {
-  if (is.null(project_root)) {
-    candidates <- c(
-      getwd(),
-      normalizePath(file.path(getwd(), ".."), mustWork = FALSE),
-      normalizePath(file.path(getwd(), "..", ".."), mustWork = FALSE)
-    )
-    project_root <- NULL
-    for (path in unique(candidates[nzchar(candidates)])) {
-      if (file.exists(file.path(path, "config", "experiments.R"))) {
-        project_root <- normalizePath(path)
-        break
+locate_project_root <- function() {
+  starts <- unique(na.omit(c(
+    Sys.getenv("PROXY_CFR_PROJECT_ROOT", unset = NA_character_),
+    getwd(),
+    {
+      if (!requireNamespace("knitr", quietly = TRUE)) NULL
+      else tryCatch({
+        inp <- knitr::current_input()
+        if (is.null(inp) || !nzchar(inp)) NULL else dirname(normalizePath(inp, mustWork = FALSE))
+      }, error = function(e) NULL)
+    }
+  )))
+
+  for (start in starts) {
+    path <- start
+    for (i in seq_len(10L)) {
+      for (root in unique(c(path, file.path(path, "proxy-cfr-comparison")))) {
+        if (file.exists(file.path(root, "config", "experiments.R"))) {
+          return(normalizePath(root))
+        }
       }
+      parent <- dirname(path)
+      if (identical(parent, path)) break
+      path <- parent
     }
-    if (is.null(project_root)) {
-      stop("Cannot find proxy-cfr-comparison project root.")
-    }
-  } else {
-    project_root <- normalizePath(project_root, mustWork = TRUE)
   }
 
-  assign("PROJECT_ROOT", project_root, envir = .GlobalEnv)
+  rlang::abort(
+    "Cannot find proxy-cfr-comparison/. Setwd to the project or open analysis.qmd."
+  )
+}
+
+load_project <- function(project_root = NULL) {
+  project_root <- project_root %||% locate_project_root()
+  project_root <- normalizePath(project_root, mustWork = TRUE)
+
+  if (normalizePath(getwd(), mustWork = FALSE) != project_root) {
+    setwd(project_root)
+  }
 
   r_dir <- file.path(project_root, "R")
-  cfg <- file.path(project_root, "config", "experiments.R")
 
   source(file.path(r_dir, "paths.R"), local = .GlobalEnv)
-  source(cfg, local = .GlobalEnv)
+  source(file.path(project_root, "config", "experiments.R"), local = .GlobalEnv)
   source(file.path(r_dir, "io.R"), local = .GlobalEnv)
+  source(file.path(r_dir, "dod2k_cache.R"), local = .GlobalEnv)
   source(file.path(r_dir, "proxy_networks.R"), local = .GlobalEnv)
   source(file.path(r_dir, "cfr_runner.R"), local = .GlobalEnv)
   source(file.path(r_dir, "validation.R"), local = .GlobalEnv)
@@ -38,7 +55,4 @@ load_project <- function(project_root = NULL) {
   invisible(project_root)
 }
 
-if (interactive() && !exists("PROJECT_LOADED", envir = .GlobalEnv)) {
-  load_project()
-  assign("PROJECT_LOADED", TRUE, envir = .GlobalEnv)
-}
+`%||%` <- function(x, y) if (is.null(x)) y else x

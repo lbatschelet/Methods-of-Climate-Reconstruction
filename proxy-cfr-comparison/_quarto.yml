@@ -2,6 +2,8 @@ project:
   type: default
   output-dir: output
 
+jupyter: dod2k-cfr
+
 format:
   html:
     theme: cosmo

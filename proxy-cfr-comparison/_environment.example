@@ -1,0 +1,2 @@
+# Copy to _environment (generated automatically by scripts/setup_python.sh)
+QUARTO_PYTHON=.venv/bin/python

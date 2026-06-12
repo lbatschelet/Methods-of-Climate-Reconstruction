@@ -34,7 +34,18 @@ DOD2K_ARCHIVE_WOOD <- "Wood"
 
 #' Proxy measurement types (`paleoData_proxy` in DoD2k metadata)
 DOD2K_PROXY_D18O <- "d18O"
+DOD2K_PROXY_D13C <- "d13C"
+DOD2K_PROXY_GROWTH_RATE <- "growth rate"
+DOD2K_PROXY_MGCA <- "Mg/Ca"
 DOD2K_PROXY_RING_WIDTH <- "ring width"
+
+#' All speleothem proxy types in DoD2k v2.0 (archiveType Speleothem)
+DOD2K_SPELEOTHEM_PROXIES <- c(
+  DOD2K_PROXY_D18O,
+  DOD2K_PROXY_D13C,
+  DOD2K_PROXY_GROWTH_RATE,
+  DOD2K_PROXY_MGCA
+)
 
 #' Proxy network presets
 PROXY_NETWORKS <- list(
