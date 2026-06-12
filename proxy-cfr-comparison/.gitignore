@@ -1,10 +1,9 @@
 _site/
 .quarto/
 output/
+analysis_cache/
 *.rds
 .DS_Store
+**/*.quarto_ipynb
 
 /.quarto/
-**/*.quarto_ipynb
-_environment
-.venv/

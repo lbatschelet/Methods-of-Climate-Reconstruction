@@ -1,33 +1,20 @@
-# Proxy CFR Comparison
+# DoD2k speleothem overview
 
-Single Quarto notebook (`analysis.qmd`): native **`{python}`** and **`{r}`** chunks.
+Single file: **`analysis.qmd`** — load DoD2k, overview plots. All R code is in the setup chunk at the top.
 
-| Language | Role |
-|----------|------|
-| **Python** | Load/filter DoD2k ([official toolkit](https://lluecke.github.io/dod2k/)) |
-| **R** (tidyverse) | CFR, validation, ggplot |
+## Requirements
 
-Python writes `output/cache/dod2k_timeseries.parquet`; R reads it with **arrow**. No `reticulate` bridge inside the R modules.
+```bash
+Rscript -e "install.packages(c('tidyverse', 'plotly'), repos='https://cloud.r-project.org')"
+```
 
-## Setup
+## Run
 
 ```bash
 cd proxy-cfr-comparison
-bash scripts/setup_python.sh          # .venv + Jupyter kernel dod2k-cfr
-bash scripts/setup_dod2k_repo.sh      # optional: dod2k_utilities
-Rscript -e "install.packages('arrow', repos='https://cloud.r-project.org')"
+quarto render analysis.qmd
 ```
 
-R packages: **tidyverse**, **arrow**, **ggplot2**, **ncdf4**, **glue**, plus CFR deps (`foreach`, `doParallel`, `mvnfast`).
+Or open `analysis.qmd` in RStudio and **Run All**.
 
-Quarto uses kernel **`dod2k-cfr`**. Setup writes a wrapper at `~/.quarto-env/bin/python` so plain `quarto render` works even with a global Quarto Python config.
-
-## Render
-
-```bash
-cd proxy-cfr-comparison
-bash scripts/setup_python.sh   # once
-quarto render                  # or: bash scripts/render.sh
-```
-
-Run chunks top-to-bottom: **setup-r** → **dod2k-load** (Python) → R sections.
+Data: `../course/data/dod2k_v2.0/` (compact CSV). Cache: `output/cache/dod2k_timeseries.rds`.
