@@ -15,6 +15,7 @@ R_libs/
 # Quarto
 proxy-cfr-comparison/_site/
 proxy-cfr-comparison/.quarto/
+proxy-cfr-comparison/output/*.html
 **/.quarto/
 
 # Project outputs (reproducible from source)

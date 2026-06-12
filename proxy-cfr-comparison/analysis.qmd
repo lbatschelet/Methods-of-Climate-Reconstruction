@@ -1,0 +1,210 @@
+---
+title: "Proxy network CFR comparison"
+subtitle: "DoD2k speleothems vs tree-ring baselines"
+author: "Climate reconstruction project"
+date: last-modified
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: false
+    code-tools: true
+    fig-width: 8
+    fig-height: 5
+    fig-dpi: 120
+params:
+  quick_run: true       # TRUE: 3 fast experiments; FALSE: full batch
+  overwrite_cfr: false    # TRUE: re-run CFR even if cached
+execute:
+  warning: false
+  message: false
+---
+
+Work in this file like a notebook: run chunks interactively, then **Render** when you want the HTML report.
+
+```{r}
+#| label: setup
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+if (!file.exists("config/experiments.R")) {
+  stop("Open this file from proxy-cfr-comparison/ (project root).")
+}
+
+source("R/load_project.R")
+load_project()
+library(ggplot2)
+
+quick_run <- params$quick_run
+overwrite_cfr <- params$overwrite_cfr
+```
+
+# Introduction
+
+Compare **climate field reconstructions (CFR)** across proxy networks. Focus: **DoD2k v2.0 speleothems** vs tree-ring baselines.
+
+| Dimension | What we vary |
+|-----------|----------------|
+| **Proxy network** | DoD2k speleothem δ18O, DoD2k trees, combined; N-TREND baseline |
+| **Calibration** | Years for PCR in `course/exercises/Master_CFR.R` |
+| **Validation** | Independent years vs CRUTEM |
+
+Speleothems in DoD2k: filter **`archiveType = Speleothem`** and **`paleoData_proxy = d18O`** ([DoD2k docs](https://lluecke.github.io/dod2k/)).
+
+# 1. Proxy networks
+
+```{r}
+#| label: preview-networks
+
+calib <- CALIBRATION_SCHEMES$course_split$calibration
+
+cat("DoD2k archive × proxy (v2.0):\n")
+print(head(summarize_dod2k_archives("v2"), 12))
+
+network_ids <- c("dod2k_speleothems", "dod2k_trees", "dod2k_speleo_trees", "ntrend_trees")
+previews <- lapply(network_ids, function(id) {
+  net <- build_proxy_network(
+    id,
+    calib_start = calib[1],
+    calib_end = calib[2]
+  )
+  cbind(proxy_network_map_df(net), label = net$meta$label)
+})
+proxy_map_df <- do.call(rbind, previews)
+
+knitr::kable(
+  unique(proxy_map_df[, c("network", "label")]),
+  caption = "Networks after calibration coverage filtering"
+)
+```
+
+```{r}
+#| label: plot-proxy-locations
+#| fig-cap: "Proxy locations (course_split calibration filter)"
+
+plot_proxy_map(proxy_map_df, title = "Proxy networks")
+```
+
+# 2. Run reconstructions
+
+Each experiment calls `course/exercises/Master_CFR.R` and caches under `output/cfr/`.
+
+```{r}
+#| label: experiment-plan
+
+knitr::kable(
+  EXPERIMENT_PLAN[EXPERIMENT_PLAN$run, ],
+  caption = "Default experiment matrix"
+)
+```
+
+```{r}
+#| label: select-experiments
+
+if (quick_run) {
+  selected <- data.frame(
+    network_id = c("dod2k_speleothems", "dod2k_speleo_trees", "ntrend_trees"),
+    calibration_id = rep("course_split", 3L),
+    stringsAsFactors = FALSE
+  )
+} else {
+  selected <- EXPERIMENT_PLAN[EXPERIMENT_PLAN$run, c("network_id", "calibration_id")]
+}
+
+selected$experiment_id <- paste(selected$network_id, selected$calibration_id, sep = "__")
+knitr::kable(selected, caption = "Experiments to run")
+```
+
+```{r}
+#| label: run-cfr
+#| cache: true
+
+results <- setNames(vector("list", nrow(selected)), selected$experiment_id)
+
+for (i in seq_len(nrow(selected))) {
+  id <- selected$experiment_id[i]
+  message("=== ", id, " ===")
+  results[[id]] <- run_cfr_experiment(
+    network_id = selected$network_id[i],
+    calibration_id = selected$calibration_id[i],
+    overwrite = overwrite_cfr
+  )
+}
+
+ok <- vapply(results, function(x) is.null(x$error), logical(1))
+if (!any(ok)) stop("All CFR experiments failed.")
+if (!all(ok)) {
+  warning("Some experiments failed: ", paste(names(results)[!ok], collapse = ", "))
+}
+```
+
+# 3. Validation
+
+Per grid cell (Exercise 6 style): correlation **r**, **RMSE**, **RMSESS** = `1 - RMSE / RMSE_clim`.
+
+```{r}
+#| label: validate-all
+
+skills <- lapply(results[ok], function(res) {
+  validate_cfr_result(res, calibration_id = res$calibration_id)
+})
+
+knitr::kable(
+  print_skill_summary(skills),
+  caption = "Skill summary (median grid + index validation)"
+)
+```
+
+```{r}
+#| label: plot-maps
+#| fig-height: 6
+#| fig-cap: "Validation correlation r"
+
+for (s in skills) {
+  print(
+    plot_skill_map(
+      s$grid_validation$r,
+      lon = results[[s$experiment_id]]$reconstruction$lon,
+      lat = results[[s$experiment_id]]$reconstruction$lat,
+      title = paste("Validation r —", s$experiment_id),
+      limits = c(-1, 1)
+    )
+  )
+}
+```
+
+```{r}
+#| label: multi-calibration
+
+if (!quick_run) {
+  schemes <- names(CALIBRATION_SCHEMES)
+  speleo_results <- lapply(schemes, function(sc) {
+    run_cfr_experiment("speleothem_ntrend", sc, overwrite = FALSE)
+  })
+  names(speleo_results) <- schemes
+  cmp <- skill_comparison_table(speleo_results, calibration_id = schemes)
+  knitr::kable(round(cmp, 3))
+  print(plot_skill_comparison(cmp, "index_val_r"))
+} else {
+  cat("Set params$quick_run = FALSE to compare all calibration schemes.\n")
+}
+```
+
+# 4. Discussion
+
+**Proxy networks:** DoD2k v2.0 has 224 speleothem δ18O records globally (~41 after our calibration filter). Tree networks give dense NH coverage; combined networks change the PCA basis.
+
+**Calibration / validation:** Later calibration emphasises recent warming; early validation tests low-frequency variability.
+
+---
+
+```{r}
+#| label: session
+
+sessionInfo()
+```

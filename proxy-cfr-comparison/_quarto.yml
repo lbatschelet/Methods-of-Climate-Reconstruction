@@ -1,36 +1,15 @@
 project:
-  type: website
-  output-dir: _site
-  render:
-    - index.qmd
-    - analysis/report.qmd
-
-website:
-  title: "Proxy CFR Comparison"
-  navbar:
-    background: primary
-    left:
-      - href: index.qmd
-        text: Home
-      - href: analysis/report.qmd
-        text: Analysis
-    right:
-      - icon: github
-        href: https://github.com/lbatschelet/Methods-of-Climate-Reconstruction
+  type: default
+  output-dir: output
 
 format:
   html:
-    theme:
-      light: cosmo
-      dark: darkly
+    theme: cosmo
     toc: true
     toc-depth: 3
     number-sections: true
-    code-fold: true
+    code-fold: false
     code-tools: true
-    fig-width: 8
-    fig-height: 5
-    fig-dpi: 120
 
 execute:
   freeze: auto

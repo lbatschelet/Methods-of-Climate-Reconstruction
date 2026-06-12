@@ -10,11 +10,10 @@ Methods-of-Climate-Reconstruction/
 │   ├── data/
 │   ├── exercises/
 │   └── materials/
-└── proxy-cfr-comparison/        # Quarto analysis project
-    ├── _quarto.yml
-    ├── index.qmd
+└── proxy-cfr-comparison/        # Quarto notebook + R modules
+    ├── analysis.qmd             # main notebook (render this)
     ├── R/
-    └── analysis/
+    └── config/
 ```
 
 | Part | Description |
@@ -32,11 +31,11 @@ source("R/load_project.R")
 run_cfr_experiment("dod2k_speleothems", "course_split")
 ```
 
-**Quarto website:**
+**Quarto notebook:**
 
 ```bash
 cd proxy-cfr-comparison
-quarto render
+quarto render analysis.qmd
 ```
 
 ## Data
