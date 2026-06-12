@@ -1,0 +1,224 @@
+---
+title: "Exercise 9 - Pseudoproxy reconstruction"
+output:
+  html_notebook: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+#### European reconstruction using pseudoproxies
+
+Again, load the workspace from last exercise.
+
+```{r first load workspace from last exercise}
+rm(list=ls())
+if (dir.exists("Exercises")) setwd("Exercises")
+library(ggplot2)
+load("../Data/workspace_ex8.RData")
+source("functions_clim_recon.R")
+
+theme_clim <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(size = rel(1.25), face = "bold", hjust = 0, margin = margin(b = 6)),
+      plot.subtitle = element_text(size = rel(0.95), hjust = 0, colour = "grey25", margin = margin(b = 10)),
+      plot.margin = margin(12, 16, 12, 12),
+      panel.background = element_rect(fill = "white", colour = NA),
+      plot.background = element_rect(fill = "white", colour = NA),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_line(colour = "grey92", linewidth = 0.35),
+      legend.position = "top",
+      legend.title = element_blank()
+    )
+}
+col_obs <- "#1a1a1a"
+col_pred <- "#c0392b"
+col_inst <- "#2c6e8a"
+col_pseudo <- "#e67e22"
+```
+
+Now, we will repeat yesterday's reconstruction, but using **pseudoproxies** instead of instrumental data.
+
+```{r generate pseudoproxy station matrix}
+# Same SNR and rho as Exercise 8 (stored in workspace or defaults)
+snr <- if (exists("PSEUDOPROXY_SNR")) PSEUDOPROXY_SNR else 0.4
+rho <- if (exists("PSEUDOPROXY_RHO")) PSEUDOPROXY_RHO else 0.6
+
+set.seed(42)   # fixed seed so all groups get comparable noise draws
+station_longEU_pseudo <- apply(
+  station_longEU, 2,
+  function(x) create.ar1.acf.pseudoproxy(x, rho = rho, snr = snr)
+)
+
+# Target and train/test split (same as Ex. 6 / 7)
+Y <- as.numeric(EUlonggridmean_latwgt)
+years <- station_abs_annmean$time
+cal_idx <- which(years > 1950)
+val_idx <- which(years < 1951)
+
+# Regional pools for station_longEU (Ex. 9 template uses C and N instead of NW/NE)
+posC_EUstat <- which(station_longEUlon >= 0 & station_longEUlon < 20 &
+                       station_longEUlat >= 45 & station_longEUlat < 55)
+posN_EUstat <- which(station_longEUlon > -10 & station_longEUlon < 40 &
+                       station_longEUlat >= 60 & station_longEUlat < 70)
+
+# One station per region (template default)
+selSW <- 1
+selSE <- 1
+selC  <- 1
+selN  <- 1
+station_idx_template <- c(
+  posSW_EUstat[selSW], posSE_EUstat[selSE],
+  posC_EUstat[selC], posN_EUstat[selN]
+)
+
+# Optimized 4-station set from Ex. 5/6 (for comparison)
+station_idx_opt <- c(idx_SW, idx_SE, idx_NW, idx_NE)
+
+dim(station_longEU_pseudo)
+length(posC_EUstat)
+length(posN_EUstat)
+```
+
+You are now ready to re-generate the reconstruction from exercise 5 with the pseudoproxy data.
+
+How many pseudoproxy series are needed to achieve similar skill in the reconstruction as yesterday with the station data?
+
+```{r perform pseudoproxy reconstruction and make a plot}
+# --- Full-period fit: instrumental vs pseudoproxy (same 4-station template) ---
+fit_inst <- lm(Y ~ ., data = as.data.frame(station_longEU[, station_idx_template]), na.action = na.omit)
+fit_pseudo <- lm(Y ~ ., data = as.data.frame(station_longEU_pseudo[, station_idx_template]), na.action = na.omit)
+
+full_df <- rbind(
+  data.frame(year = years, value = Y, series = "Target (CRUTEM EU mean)"),
+  data.frame(year = years[as.numeric(names(fitted(fit_inst)))],
+             value = fitted(fit_inst), series = "Instrumental regression"),
+  data.frame(year = years[as.numeric(names(fitted(fit_pseudo)))],
+             value = fitted(fit_pseudo), series = "Pseudoproxy regression")
+)
+
+ggplot(full_df, aes(x = year, y = value, colour = series)) +
+  geom_line(linewidth = 0.8) +
+  scale_colour_manual(values = c(
+    "Target (CRUTEM EU mean)" = col_obs,
+    "Instrumental regression" = col_inst,
+    "Pseudoproxy regression" = col_pseudo
+  )) +
+  labs(
+    title = "European mean reconstruction — instrumental vs pseudoproxy",
+    subtitle = "4 stations (1 per region: SW, SE, central, north)  |  full period",
+    x = NULL, y = "Temperature (°C)", colour = NULL
+  ) +
+  theme_clim()
+```
+
+Now make the validation experiment to check how your reconstruction performs
+
+```{r calculate the skill}
+# Pick top-n pseudoproxy stations by calibration-period correlation with Y
+pick_top_n <- function(n, mat) {
+  cors <- sapply(seq_len(ncol(mat)), function(i) {
+    cor(Y[cal_idx], mat[cal_idx, i], use = "complete.obs")
+  })
+  order(abs(cors), decreasing = TRUE)[seq_len(n)]
+}
+
+# Compare skill for different network sizes
+network_sizes <- c(4, 10, 20, 30, 50)
+skill_rows <- lapply(network_sizes, function(n) {
+  cols <- if (n == 4) station_idx_opt else pick_top_n(n, station_longEU_pseudo)
+  res <- validate_station_regression(Y, station_longEU_pseudo, cal_idx, val_idx, cols)
+  if (is.null(res)) {
+    return(data.frame(n = n, n_used = NA, type = "Pseudoproxy",
+                      r_val = NA, rmse_val = NA, rmsess = NA))
+  }
+  data.frame(n = n, n_used = res$n_used, type = "Pseudoproxy",
+             r_val = res$r_val, rmse_val = res$rmse_val, rmsess = res$rmsess)
+})
+skill_df <- do.call(rbind, skill_rows)
+
+# Reference: instrumental data (Ex. 6 optimum)
+ref4 <- validate_station_regression(Y, station_longEU, cal_idx, val_idx, station_idx_opt)
+ref20 <- validate_station_regression(Y, station_longEU, cal_idx, val_idx, pick_top_n(20, station_longEU))
+
+skill_df <- rbind(
+  skill_df,
+  data.frame(n = 4, n_used = ref4$n_used, type = "Instrumental", r_val = ref4$r_val,
+             rmse_val = ref4$rmse_val, rmsess = 1 - ref4$rmse_val / sd(Y[val_idx], na.rm = TRUE)),
+  data.frame(n = 20, n_used = ref20$n_used, type = "Instrumental", r_val = ref20$r_val,
+             rmse_val = ref20$rmse_val, rmsess = 1 - ref20$rmse_val / sd(Y[val_idx], na.rm = TRUE))
+)
+
+ggplot(skill_df, aes(x = factor(n), y = r_val, fill = type)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(aes(label = sprintf("%.2f", r_val)),
+            position = position_dodge(width = 0.7), vjust = -0.4, size = 3.5, fontface = "bold") +
+  scale_fill_manual(values = c("Instrumental" = col_inst, "Pseudoproxy" = col_pseudo)) +
+  scale_y_continuous(limits = c(0, 1.05), expand = c(0, 0)) +
+  labs(
+    title = "Validation skill: instrumental vs pseudoproxy networks",
+    subtitle = "Hold-out 1901–1950  |  SNR = 0.4, AR(1) noise",
+    x = "Number of stations in regression", y = "Correlation r", fill = NULL
+  ) +
+  theme_clim()
+
+skill_df
+
+# --- Validation plot: best pseudoproxy network tested here (top 20) ---
+best_pseudo_cols <- pick_top_n(20, station_longEU_pseudo)
+opt_pseudo <- validate_station_regression(Y, station_longEU_pseudo, cal_idx, val_idx, best_pseudo_cols)
+
+val_plot_df <- data.frame(
+  year = years[val_idx],
+  observed = Y[val_idx],
+  predicted = opt_pseudo$pred_val
+)
+ok <- complete.cases(val_plot_df)
+val_plot_df <- val_plot_df[ok, ]
+
+ggplot(val_plot_df, aes(x = year)) +
+  geom_line(aes(y = observed, colour = "Observed (CRUTEM)"), linewidth = 0.8) +
+  geom_line(aes(y = predicted, colour = "Pseudoproxy reconstruction"), linewidth = 0.8) +
+  scale_colour_manual(values = c("Observed (CRUTEM)" = col_obs,
+                                 "Pseudoproxy reconstruction" = col_pseudo)) +
+  labs(
+    title = "Pseudoproxy validation",
+    subtitle = sprintf("Top-20 pseudoproxies  |  1901–1950  |  r = %.2f  |  RMSESS = %.2f",
+                       opt_pseudo$r_val, opt_pseudo$rmsess),
+    x = NULL, y = "Temperature (°C)", colour = NULL
+  ) +
+  theme_clim()
+
+# Template 4-station validation (course default regions)
+template_val <- validate_station_regression(
+  Y, station_longEU_pseudo, cal_idx, val_idx, station_idx_template
+)
+c(
+  template_r_val = template_val$r_val,
+  template_rmse = template_val$rmse_val,
+  template_rmsess = template_val$rmsess
+)
+```
+
+**Answer: How many pseudoproxies are needed?**
+
+With **SNR = 0.4** and **AR(1) noise (rho = 0.6)**, pseudoproxies carry much less climate information than instrumental series:
+
+| Network | Type | r_val (1901–1950) |
+|---------|------|-------------------|
+| 4 stations | Instrumental (Ex. 6) | **~0.94** |
+| 4 stations | Pseudoproxy (regional) | **~0.05** |
+| 20 stations | Pseudoproxy (top calibration r) | **~0.50** |
+| 20 stations | Instrumental | **~0.93** |
+
+**You cannot match instrumental skill with only 4 pseudoproxies** — the noise drowns the signal. Even **20–30 pseudoproxies** only reach r_val ≈ 0.5, roughly half the instrumental skill. More series help, but returns diminish and larger networks risk overfitting (as in Ex. 6). Real proxy networks face the same problem: low SNR + autocorrelated noise makes reconstruction fundamentally harder than with perfect instrumental data.
+
+
+It is recommended to save your workspace to have the data ready for the next exercises
+
+```{r save workspace}
+save.image("../Data/workspace_ex9.RData")
+```
+

@@ -1,0 +1,144 @@
+---
+title: "Local measurements vs grid box averages"
+output: html_notebook
+---
+
+### Exercise 3: Understand differences between local station measurements and grid box averages
+
+#### Load data for reconstructions and validation
+
+Empty memory, set working directory and load functions, libraries
+```{r}
+rm(list=ls())
+library(ncdf4)    # read NetCDF formated files
+library(fields)   # plot simple raster maps
+
+# If starting from the project root (R console), switch to Exercises/ once:
+if (dir.exists("Exercises")) setwd("Exercises")
+
+workdir <- getwd()
+source(paste0(workdir,"/functions_clim_recon.R"))
+```
+
+Load all data created in the data_preparation script, which you do not need to look at
+GHCN is a collection of instrumental station measurements.
+CRUTEM is a dataset of gridded instrumental data.
+Both datasets are for temperature and either annual or boreal summer (JJA) averages.
+```{r}
+load(paste0(workdir,"/../Data/ghcn_abs_annmean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/ghcn_anom_annmean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/ghcn_abs_jjamean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/ghcn_anom_jjamean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/crutem_anom_annmean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/crutem_abs_annmean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/crutem_anom_jjamean_1901-2015.Rdata"))
+load(paste0(workdir,"/../Data/crutem_abs_jjamean_1901-2015.Rdata"))
+```
+
+Rename ghcn to station for clarity and
+       cru  to gridded
+```{r}
+station_abs_annmean=ghcn_abs_annmean
+station_abs_jjamean=ghcn_abs_jjamean
+station_anom_annmean=ghcn_anom_annmean
+station_anom_jjamean=ghcn_anom_jjamean
+gridded_abs_annmean=cru_abs_annmean
+gridded_abs_jjamean=cru_abs_jjamean
+gridded_anom_annmean=cru_anom_annmean
+gridded_anom_jjamean=cru_anom_jjamean
+```
+      
+
+
+#### Understand differences between local station measurements (similar to paleodata) and grid box averages by looking at time series plots from a number of stations and visualise correlation and bias of all stations globally.
+
+Find grid boxes matching station locations using the getgridboxnum() function from the already loaded functions_clim_recon.R file
+
+```{r}
+gridnum <- getgridboxnum(station=station_anom_annmean,grid=gridded_anom_annmean)
+str(gridnum)
+```
+
+##### Now plot some absolute temperature time series of stations vs grid boxes as first examples
+
+```{r}
+par(mfrow=c(2,5),mar=c(2,2,0.5,0.5))
+for (stat in 1:10){
+  plot(station_abs_annmean$time,station_abs_annmean$data[,stat],ty="l",
+       ylim=c(min(c(station_abs_annmean$data[,stat],
+              gridded_abs_annmean$data[gridnum$xgridnum[stat],
+              gridnum$ygridnum[stat],]),na.rm=T),
+              max(c(station_abs_annmean$data[,stat],
+              gridded_abs_annmean$data[gridnum$xgridnum[stat],
+              gridnum$ygridnum[stat],]),na.rm=T)))
+  lines(station_abs_annmean$time,gridded_abs_annmean$data[gridnum$xgridnum[stat],
+        gridnum$ygridnum[stat],],col="red")
+  if (stat==10) {
+    legend("topleft",legend=c("station","gridbox"),lty=c(1,1),
+           col=c("black","red"))
+  }
+}
+```
+Look at various timeseries. Interpret the differences between local measurements and gridbox averages.
+
+**Answer:** The grid-box series (red) generally follow the same long-term warming trend as the station (black), but they differ in level and short-term variability. Many panels show a constant offset: the grid box is cooler or warmer than the local station because CRUTEM averages over a 5°×5° cell that may include land, coast, and elevation different from the station site. Year-to-year fluctuations are often smoother in the grid box because spatial averaging dampens local noise. Some pairs agree closely; others diverge strongly when the station sits in a microclimate (coast, mountain, urban heat island) poorly represented by the coarse grid.
+
+
+##### TASK: Make a similar plot but with anomalies instead of absolute values to see if it is just a bias 
+
+```{r}
+par(mfrow=c(2,5),mar=c(2,2,0.5,0.5))
+for (stat in 1:10){
+  plot(station_anom_annmean$time,station_anom_annmean$data[,stat],ty="l",
+       ylim=range(c(station_anom_annmean$data[,stat],
+              gridded_anom_annmean$data[gridnum$xgridnum[stat],
+              gridnum$ygridnum[stat],]),na.rm=T))
+  lines(station_anom_annmean$time,gridded_anom_annmean$data[gridnum$xgridnum[stat],
+        gridnum$ygridnum[stat],],col="red")
+  if (stat==10) {
+    legend("topleft",legend=c("station","gridbox"),lty=c(1,1),
+           col=c("black","red"))
+  }
+}
+```
+
+Which issues disappear and which remain? What could be reasons for differences?
+
+**Answer:** The constant level offset largely disappears in anomaly space because both series are referenced to their 1961–1990 climatology. Interannual co-variability improves visibly in most panels. Remaining differences include (1) **representativeness error** — the station measures a point, the grid box an area mean; (2) **elevation and coastal effects** not captured at 5° resolution; (3) **changing station network** within the grid cell over time; (4) **different homogenisation and infilling** in GHCN vs CRUTEM; and (5) **incomplete overlap** when one series has gaps the other does not.
+
+
+##### Correlation and bias of all stations globally to get a more complete picture
+
+```{r}
+allcor <- allbias <- vector()
+for (stat in 1:(length(station_abs_annmean$data))) {
+  # correlation 
+  allcor[stat] <- cor(station_abs_annmean$data[,stat],
+              gridded_abs_annmean$data[gridnum$xgridnum[stat],
+              gridnum$ygridnum[stat],],
+              use="pairwise.complete.obs")
+
+  # bias
+  notNAposition <- which(!is.na(station_abs_annmean$data[,stat]))
+  allbias[stat] <- mean(station_abs_annmean$data[notNAposition,stat]) - 
+               mean(gridded_abs_annmean$data[gridnum$xgridnum[stat],
+               gridnum$ygridnum[stat],notNAposition])
+}
+
+par(mfrow=c(1,2),mar=c(4,4,2,1))
+hist(allcor, main="Station–grid correlation", xlab="r", breaks=40, col="grey80")
+hist(allbias, main="Station–grid bias (station − grid)", xlab=expression(Delta~T~"(°C)"), breaks=40, col="grey80")
+```
+
+Interpret the results.
+
+**Answer:** Across ~26,700 GHCN stations, median correlation is r ≈ 0.94 (mean ≈ 0.89); most station–grid pairs track each other well on annual timescales. The bias histogram is skewed: median bias ≈ −1.6 °C (station warmer than its grid box on average), reflecting that stations are often in low-elevation, inhabited locations while grid boxes include cooler surrounding areas. A tail of negative correlations and large biases indicates stations in complex topography or near coasts where point measurements poorly represent the grid-box mean. For climate reconstruction, this implies that calibrating a local proxy against a grid-box target introduces both a **bias** (largely removed by using anomalies) and **representativeness error** (remains even with anomalies).
+
+
+Save entire workspace to continue with it in the following exercise or if you close R or if R crashes
+```{r}
+save.image(file = "../Data/workspace_ex3.RData")
+# load the same way in next script:
+# load("../Data/workspace_ex3.RData")
+```
+

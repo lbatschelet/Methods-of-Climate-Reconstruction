@@ -1,0 +1,62 @@
+---
+title: "Proxy CFR Comparison"
+subtitle: "Climate field reconstructions across proxy networks"
+---
+
+::: {.column-screen}
+
+## English
+
+This **Quarto project** compares climate field reconstructions (CFR) built from different proxy networks — with a focus on **DoD2k v2.0 speleothems** versus tree-ring baselines.
+
+| Component | Location |
+|-----------|----------|
+| Course data & exercises | [`course/`](../course/) |
+| Analysis code | [`R/`](R/) |
+| Full report | [Analysis (EN)](analysis/report-en.qmd) |
+
+**Quick start (R):**
+
+```r
+setwd("proxy-cfr-comparison")
+source("R/load_project.R")
+run_cfr_experiment("dod2k_speleothems", "course_split")
+```
+
+---
+
+## Deutsch
+
+Dieses **Quarto-Projekt** vergleicht klimatische Feldrekonstruktionen (CFR) aus verschiedenen Proxy-Netzwerken — mit Schwerpunkt **DoD2k v2.0 Speleotheme** versus Baumring-Baselines.
+
+| Komponente | Ort |
+|------------|-----|
+| Kursdaten & Übungen | [`course/`](../course/) |
+| Analyse-Code | [`R/`](R/) |
+| Vollständiger Bericht | [Analyse (DE)](analysis/report-de.qmd) |
+
+**Schnellstart (R):**
+
+```r
+setwd("proxy-cfr-comparison")
+source("R/load_project.R")
+run_cfr_experiment("dod2k_speleothems", "course_split")
+```
+
+:::
+
+## Repository layout
+
+```
+Methods-of-Climate-Reconstruction/
+├── course/                    # Course materials (not part of Quarto render)
+│   ├── data/                  # CRUTEM, PAGES, DoD2k, …
+│   └── exercises/               # Master_CFR.R, Recon_files/, …
+└── proxy-cfr-comparison/      # This Quarto project
+    ├── _quarto.yml
+    ├── R/                     # Modular analysis pipeline
+    ├── config/                # Experiment definitions
+    └── analysis/              # EN + DE reports
+```
+
+See [DoD2k documentation](https://lluecke.github.io/dod2k/) for archive metadata (`archiveType` vs `paleoData_proxy`).

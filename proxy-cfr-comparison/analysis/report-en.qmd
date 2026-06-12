@@ -1,0 +1,66 @@
+---
+title: "Proxy network CFR comparison"
+subtitle: "DoD2k speleothems vs tree-ring baselines"
+author: "Climate reconstruction project"
+date: last-modified
+params:
+  quick_run: true
+  overwrite_cfr: false
+---
+
+{{< include includes/setup.qmd >}}
+
+```{r}
+#| include: false
+cap_networks <- "Networks after calibration coverage filtering"
+cap_proxy_map <- "Proxy locations (course_split calibration filter)"
+cap_experiment_plan <- "Default experiment matrix"
+cap_selected <- "Experiments run in this render"
+cap_skill <- "Skill summary (median grid metrics + index validation)"
+title_proxy_map <- "Proxy networks"
+title_val_r <- "Validation r —"
+```
+
+# Introduction
+
+This report compares **climate field reconstructions (CFR)** driven by different **proxy networks**, and tests how **calibration / validation period choices** affect skill scores.
+
+| Dimension | What we vary |
+|-----------|----------------|
+| **Proxy network** | DoD2k speleothem δ18O (`archiveType`), DoD2k trees, combined; N-TREND baseline |
+| **Calibration** | Years used inside `Master_CFR.R` to fit PCR |
+| **Validation** | Independent years for post-hoc comparison against CRUTEM |
+
+**Speleothem note:** Per [DoD2k documentation](https://lluecke.github.io/dod2k/), speleothems are identified by **`archiveType = Speleothem`**, not by `paleoData_proxy = d18O`. We use the official v2.0 compact CSV (`load_dod2k("v2")`).
+
+# 1. Proxy networks
+
+{{< include includes/01-networks.qmd >}}
+
+# 2. Experiment design
+
+Each experiment runs `course/exercises/Master_CFR.R` (PCR, nests, PC truncation) and caches results under `output/cfr/`.
+
+{{< include includes/02-experiments.qmd >}}
+
+# 3. Validation methodology
+
+Following **Exercise 6**, for each grid cell and evaluation period:
+
+1. **Observed** = CRUTEM JJA anomaly
+2. **Predicted** = CFR field (no re-fitting)
+3. **r** = correlation over years in the period
+4. **RMSE** = root mean squared error
+5. **RMSESS** = `1 - RMSE / RMSE_clim`
+
+For the **domain index**, we compare `spatmean_recon` from Master_CFR to the latitude-weighted CRUTEM mean.
+
+{{< include includes/03-validation.qmd >}}
+
+# 4. Discussion
+
+**Proxy network effect:** DoD2k v2.0 provides **224** speleothem δ18O records globally (~41 after calibration filtering), vs. four in PAGES. Tree-only networks provide dense NH coverage; combined speleothem + tree networks change the PCA basis and spatial structure of the reconstruction.
+
+**Calibration / validation effect:** A later calibration window emphasises recent warming; early validation tests low-frequency variability. Recent hold-out is not fully independent of late-20th-century calibration — interpret accordingly.
+
+**Next steps:** archive-specific screening (Exercise 12), CPS vs PCR, sub-regional domains.

@@ -1,0 +1,261 @@
+---
+title: "Tree-ring chronology development"
+output: html_notebook
+---
+
+### Exercise 1: Build a chronology out of the tree-ring data measured in the lab
+
+empty memory, set working directory and load functions, libraries
+
+```{r}
+rm(list=ls())
+# install.packages("dplR") # run this command the first time you use this script to install the required package.
+library(dplR)    # dendrochronological program library in R including many tree-ring tools
+
+# If starting from the project root (R console), switch to Exercises/ once:
+if (dir.exists("Exercises")) setwd("Exercises")
+
+workdir <- getwd()
+if (file.exists(paste0(workdir, "/functions_clim_recon.R"))) {
+  source(paste0(workdir, "/functions_clim_recon.R"))
+}
+```
+
+#### 1.1 Load the new tree-ring data from Tronador
+
+```{r}
+# Lab data for Gruppe 1 (see Data/HAT_Gruppe1.rwl)
+tro <- read.rwl(paste0("../Data/HAT_Gruppe1.rwl"))
+
+#have a look at the structure of the data
+str(tro)
+
+colnames(tro) # the name of the samples (in columns)
+
+range(time(tro)) #which year range is covered by the collection
+
+rwl.report(tro) #some report about the data, including missing rings
+
+summary(tro) #summary statistics of the series
+
+```
+
+#### 1.2 make some sipmle plots
+
+**Task 1: Discuss the plot of the tree-ring measurements. What do you observe?**
+
+**Answer:** Gruppe 1 contains **6 samples** (`04_group`, `group 1`, `HAT01_Gr`, `HAT03_Gr`, `HAT05_gr`, `HAT06_gr`) spanning **1433–2025**, but with uneven coverage (`seg.plot`): `HAT06_gr` starts earliest (1433), `HAT05_gr` only in 1748, and `HAT03_Gr` extends to 2025. The spaghetti plot shows a clear age-related trend (wider rings in early years, decline with age). Mean inter-series correlation is modest (≈ 0.16) with high autocorrelation (AR1 ≈ 0.63). No missing rings were reported. A robust chronology with ≥ 5 cores is only possible from **1712** onwards (5 of 6 series); with all 6 cores from 1748.
+
+```{r plots}
+seg.plot(tro) #shows the temporal coverage of each sample
+
+plot(tro, plot.type="spag") #plot all measurements 
+
+
+```
+
+#### 1.3 detrend the tree-ring data
+
+We can either use the same method for each series, or we can detrend each series differently depending on its characteristics.
+
+**Task 2: based on what you observed in task 1: Choose your preferred option for detrending or try out both ways. Generate your own detrended chronology (tro.det) based on the example code below.**
+
+**Option A** applies one method to all series (`AgeDepSpline`). **Option B** (`i.detrend`) shows each series interactively and lets you choose between a smoothing spline and a modified negative exponential per series. Because `i.detrend` requires manual input, we use `ModNegExp` below as a batch equivalent for comparison — run `i.detrend(tro)` in the R console to inspect each series yourself.
+
+```{r detrend option A}
+# Option A: same method for all series
+tro.det.A <- detrend(tro, method = "AgeDepSpline")
+
+rwi.stats(tro)
+rwi.stats(tro.det.A)
+```
+
+```{r detrend option B}
+# Option B: interactive detrending — run this line in the console to choose a curve per series:
+# tro.det.B <- i.detrend(tro)
+
+# Batch equivalent for comparison (ModNegExp is one of the curves offered by i.detrend):
+tro.det.B <- detrend(tro, method = "ModNegExp")
+
+rwi.stats(tro.det.B)
+```
+
+```{r detrend compare}
+# Compare both detrended chronologies
+crnA <- subset(chron.stabilized(tro.det.A, winLength = 101), samp.depth > 4)
+crnB <- subset(chron.stabilized(tro.det.B, winLength = 101), samp.depth > 4)
+
+base::plot(ts(crnA[, 1], start = as.numeric(rownames(crnA)[1])),
+           ylab = "RWI", main = "Detrending comparison")
+lines(ts(crnB[, 1], start = as.numeric(rownames(crnB)[1])), col = 2)
+legend("topright", legend = c("AgeDepSpline (A)", "ModNegExp (B)"), col = c(1, 2), lty = 1)
+
+cor(crnA[intersect(rownames(crnA), rownames(crnB)), 1],
+    crnB[intersect(rownames(crnA), rownames(crnB)), 1])
+
+# Final choice for the rest of the exercise:
+tro.det <- tro.det.A
+```
+
+**Answer:**
+
+| | Option A: `AgeDepSpline` | Option B: `i.detrend` / `ModNegExp` |
+|---|---|---|
+| Approach | One flexible age-dependent spline for all series | Per-series choice (interactive) or negative exponential curve |
+| Reproducibility | Fully reproducible | Interactive choices depend on the analyst |
+| Mean inter-series correlation (rbar.eff) | 0.198 | 0.219 |
+| Signal-to-noise ratio (SNR) | 1.48 | 1.68 |
+| Stabilised chronology SD | 0.26 | 0.24 |
+| Correlation between chronologies | | r ≈ 0.94 |
+
+Both methods remove the age-related trend and centre the series around RWI ≈ 1. The two stabilised chronologies agree very well (r ≈ 0.94).
+
+**Why Option A?** All six Gruppe-1 series show a similar age-related decline, so one method for all cores is reasonable. For this small dataset, `ModNegExp` actually yields slightly higher rbar and SNR, but the difference is small. Option B (`i.detrend`) would help if individual cores looked clearly different. We keep **Option A** for a consistent, reproducible workflow across the course.
+
+**Final choice:** `tro.det <- tro.det.A` (`AgeDepSpline`).
+
+#### 1.4 make tree-ring chronology
+
+convert the individual series into a single time series by averaging them in a reasonable way.
+
+```{r make chronology}
+tro.crn <- chron(tro.det) #apply a standard method for chronology building
+
+str(tro.crn) #the chronology consists of the values plus sample depth (number of cores available per year).
+
+#for comparison, also generate a chronology out of the non-detrended raw measurements
+tro.crn.raw <- chron(tro)
+
+```
+
+#### 1.5 plot tree-ring chronology
+
+**Task 3: compare the raw and detrended chronology. What was the effect of the detrending?**
+
+**Answer:** The raw chronology (mean ≈ 0.26, SD ≈ 0.08) still contains age-related growth trends. After detrending, the chronology is centred around ≈ 1 (SD ≈ 0.30) and inter-annual variability becomes clearer. Detrending removes the age/size trend and retains inter-annual (climatically relevant) variability. Variance stabilisation (`chron.stabilized`) further reduces heteroscedasticity over time.
+
+```{r plot chronology}
+plot(tro.crn,add.spline = T,nyrs = 30)
+
+# Plot the raw chronology (non-detrended measuremenst) for comparison
+plot(tro.crn.raw,add.spline = T,nyrs = 30) 
+
+```
+
+#### 1.6 Modify / improve chronology
+
+We want a robust chronoloy, so we cut off the years with less than, say, 5 measurements. Also, we want to remove variance artifacts. This can be achieved by "stabilizing" the variance.
+
+```{r improve chronology}
+tro.crn.trunc <- subset(tro.crn, samp.depth > 4) # truncate chronology where sample depth is below 5.
+
+plot(tro.crn.trunc,add.spline = T,nyrs = 30)
+
+tro.crn.stab <- chron.stabilized(tro.det,winLength = 101) # make a variance stabilized version of the chronology.
+tro.crn.stab.trunc <- subset(tro.crn.stab, samp.depth > 4)
+
+plot(tro.crn.stab.trunc,add.spline = T,nyrs = 30)
+
+#now compare the two chronologies
+
+base::plot(ts(tro.crn.trunc[,1],start=row.names(tro.crn.trunc)[1])) # non-stabilized in black background
+lines(ts(tro.crn.stab.trunc[,1],start=row.names(tro.crn.stab.trunc)[1]),col=2) # stabilized in red on top
+
+
+```
+
+#### 1.7 write chronology to file
+
+```{r write chronology}
+#write.crn(tro.crn.stab.trunc,paste0(workdir,"/HAT.crn"))
+```
+
+#### 1.8 compare to existing older chronology from the same area
+
+**Task 4: Discuss: How well does our new dataset compare with an older existing dataset?**
+
+**Answer:** The older chronology (`arge087`) spans 888–1991; the new Gruppe-1 chronology (stabilised, depth > 4) runs **1712–2022** only. Over the overlap **1712–1991**, the two correlate with **r ≈ 0.57** — same broad patterns, but not perfect agreement (different sites, trees, and only six new cores). The compound chronology (17 old + 6 Gruppe-1 series = 23 cores) correlates more strongly with the published record and extends it to 2022. With only one group's lab data, the standalone new chronology is shorter and noisier than the full-class dataset would be.
+
+```{r compare to existing chronology}
+#load an older published chronology
+tro.old <- read.crn(paste0("../Data/arge087.crn"), header = T)
+
+#we need to add a dummy column to make it plot-able
+tro.old<-cbind(tro.old,1)
+colnames(tro.old)<-c("std","samp.depth")
+class(tro.old)<-class(tro.crn)
+
+#plot the old and the new series
+plot(tro.old,add.spline = T,nyrs = 30)
+plot(tro.crn.stab.trunc,add.spline = T,nyrs = 30)
+
+#plot them on top of each other
+base::plot(ts(tro.old[,1],start=row.names(tro.old)[1])) # old chronology in black background
+lines(ts(tro.crn.stab.trunc[,1],start=row.names(tro.crn.stab.trunc)[1]),col=2) # new stabilized in red on top
+
+#check overlap
+range(as.numeric(rownames(tro.old)))
+range(as.numeric(rownames(tro.crn.stab.trunc)))
+
+#correlate the two series (overlap only where both chronologies exist)
+overlap <- intersect(rownames(tro.old), rownames(tro.crn.stab.trunc))
+overlap <- overlap[as.numeric(overlap) <= 1991]
+cor(tro.old[overlap, 1], tro.crn.stab.trunc[overlap, 1])
+
+```
+
+#### 1.9 Make a new compound chronology from the old and new data and write it to a file
+
+```{r make new compound chronology}
+
+#first we need to read the measurements of the old dataset
+tro.old.raw <- read.rwl(paste0("../Data/arge087.rwl"))
+
+plot(tro.old.raw,plot.type = "spag")
+
+#combine the old and new data
+tro.comp<- combine.rwl(tro.old.raw,tro)
+
+colnames(tro.comp) # the name of the samples (in columns)
+
+range(time(tro.comp)) #which year range is covered by the collection
+
+rwl.report(tro.comp) #some report about the data, including missing rings
+
+summary(tro.comp) #summary statistics of the series
+
+seg.plot(tro.comp) #shows the temporal coverage of each sample
+
+plot(tro.comp, plot.type="spag") #plot all measurements
+
+#detrend the chronology (you may try out your favourite method or use interactive detrending using i.detrend.)
+tro.comp.det <- detrend(tro.comp,method = "ModNegExp")
+
+tro.comp.crn.stab <- chron.stabilized(tro.comp.det,winLength = 101) # make a variance stabilized version of the chronology.
+tro.comp.crn.stab.trunc <- subset(tro.comp.crn.stab, samp.depth > 4) # cut to years with >= 5 series
+
+plot(tro.comp.crn.stab.trunc,add.spline = T,nyrs = 31)
+
+
+#plot all together
+base::plot(ts(tro.old[,1],start=row.names(tro.old)[1])) # old chronology in black background
+lines(ts(tro.crn.stab.trunc[,1],start=row.names(tro.crn.stab.trunc)[1]),col=2) # new stabilized in red on top
+lines(ts(tro.comp.crn.stab.trunc[,1],start=row.names(tro.comp.crn.stab.trunc)[1]),col=4) # compound in blue
+
+#correlate all series (common overlap years)
+overlap <- intersect(rownames(tro.old), rownames(tro.comp.crn.stab.trunc))
+overlap <- overlap[as.numeric(overlap) <= 1991 & as.numeric(overlap) >= 1281]
+cor(cbind(tro.old[overlap, 1],
+          tro.crn.stab.trunc[overlap, 1],
+          tro.comp.crn.stab.trunc[overlap, 1]))
+
+
+#write the variance stabilized compound chronology to file for further analysis (used in Exercise 2)
+write.crn(tro.comp.crn.stab.trunc, paste0("../Data/HAT_Gruppe1-arge087-compound.crn"))
+
+#write also to csv
+write.table(cbind(rownames(tro.comp.crn.stab.trunc), tro.comp.crn.stab.trunc),
+            file = paste0("../Data/HAT_Gruppe1-arge087-compound.csv"),
+            quote = F, col.names = c("Year", "vsc", "samp depth"), sep = ",", row.names = F)
+
+```

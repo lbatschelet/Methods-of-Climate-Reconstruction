@@ -1,0 +1,66 @@
+---
+title: "Load and investigate real proxy data"
+output: html_notebook
+---
+### Exercise 10: Spatial distribution of real proxy data
+
+```{r}
+rm(list=ls())
+#install.packages("maps")
+#install.packages("mapdata")
+library(maps)
+library(mapdata)
+library(fields) # for two.colors() function
+
+# TASK: set working directory 
+workdir <- getwd()
+source(paste0(workdir,"/functions_clim_recon.R"))
+```
+
+
+##### Load PAGES and NTREND data and plot map with paleodata locations
+
+```{r}
+# read data
+p2k <- read.table(paste0(workdir,"/../data/PAGES_proxy_ann_2.0.0.txt"), header=T) # yr in 1. col
+p2kmeta <- read.table(paste0(workdir,"/../data/PAGES_metadata_2.0.0.txt"), 
+                      sep="\t",stringsAsFactors=F)
+ntr <- read.table(paste0(workdir,"/../data/N-TREND2015_data.csv"), sep=";", header=T) # yr 1. col
+ntrmeta <- read.csv(paste0(workdir,"/../data/N-TREND2015_transformed_coordinates.csv"),sep=";")
+
+# convert to same format as grid data from day 1
+p2kdata <- list(data=p2k[,-1], lon=as.numeric(p2kmeta[3,-1]),
+                lat=as.numeric(p2kmeta[2,-1]), time=as.numeric(p2k[,1]), 
+                type=p2kmeta[4,-1])
+ntrdata <- list(data=ntr[,-1], lon=ntrmeta$Long_transformed,
+                lat=ntrmeta$Lat_transformed, time=ntr[,1],
+                type=ntrmeta$Parameter)
+
+# plot map
+par(mfrow=c(1,1),mar=c(2,2,2,2))
+plot(p2kdata$lon, p2kdata$lat, # lon (x) and lat (y)
+       cex=1.0,       # cex=point size~precip
+       pch=16,        # point type
+       col="red",     #datcol,    # point fill color 
+       xlab="Longitude", ylab="Latitude",
+       main="PAGES2k proxy locations")  
+maps::map("world",interior=F,add=T,ty='l',col='black')
+
+# TASK: create a map with all location in the NTREND proxy data collection
+
+# for advanced maps try ggplot
+```
+Discuss the spatial distribution with your background knowledge on reconstructing the European average temperature and pseudoproxies.
+
+
+
+
+
+
+
+
+
+Save entire workspace to continue with it in the following exercise or if you close R or if R crashes
+```{r}
+save.image(file = "../data/workspace_ex10.RData")   
+```

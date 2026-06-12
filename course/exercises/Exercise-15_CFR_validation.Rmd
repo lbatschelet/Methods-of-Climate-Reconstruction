@@ -1,0 +1,260 @@
+---
+title: "Validation of spatial reconstruction"
+output: html_notebook
+---
+
+#### Exercise 15: Validation of spatial reconstruction
+
+## What is the task?
+
+In **Exercise 6** you fitted a regression on the **calibration period** and evaluated it on an **independent validation period** — without re-fitting. Same logic here:
+
+| Exercise 6 (stations) | Exercise 15 (CFR) |
+|-----------------------|-------------------|
+| Target: EU mean temperature | Target: CRUTEM JJA anomaly at each grid cell |
+| Predictor: station matrix | Predictor: proxy network (already used inside `Master_CFR.R`) |
+| **Observed** = CRUTEM in validation years | **Observed** = `reconstruction.target` |
+| **Predicted** = `predict(fit, Xval)` | **Predicted** = `recon` from Exercise 14 (PCR output for 750–2011) |
+
+The CFR was **calibrated on 1941–2000** in Exercise 14. We must **not** re-run the reconstruction. We only ask:
+
+> How well does the existing reconstruction match CRUTEM in **1901–1940** — a period that was **not** used for calibration?
+
+Per grid cell we compute **r**, **RMSE**, and **RMSESS** exactly as in Exercise 6:
+
+- `RMSE_clim` = RMSE of a forecast that always predicts the **local mean of the validation-period observations**
+- `RMSESS = 1 − RMSE / RMSE_clim`
+
+```{r setup}
+rm(list = ls())
+if (dir.exists("Exercises")) setwd("Exercises")
+
+library(ggplot2)
+source("functions_clim_recon.R")
+load("reconstruction_input_and_output.RData")
+
+theme_clim <- function(base_size = 13) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0),
+      plot.subtitle = element_text(colour = "grey30", hjust = 0, size = rel(0.9)),
+      strip.text = element_text(face = "bold", hjust = 0),
+      panel.background = element_rect(fill = "white", colour = NA),
+      plot.background = element_rect(fill = "white", colour = NA),
+      panel.grid = element_blank(),
+      legend.title = element_blank()
+    )
+}
+
+val_years <- 1901:1940   # independent validation (before calibration)
+cal_years <- 1941:2000   # calibration period used in Master_CFR.R
+min_years <- 30L         # need enough paired years for stable correlations
+```
+
+##### 1. Grid-cell validation — explicit code (following Exercise 6)
+
+```{r validation loop}
+nx <- length(recon$lon)
+ny <- length(recon$lat)
+
+# Result arrays: one value per grid cell
+r_cal <- r_val <- rmse_val <- rmsess <- array(NA_real_, dim = c(nx, ny))
+rmse_cal <- rmsess_cal <- array(NA_real_, dim = c(nx, ny))
+
+# --- helper: same formulas as Exercise 6, but for one grid cell ---
+score_cell <- function(obs, pred) {
+  ok <- complete.cases(obs, pred)
+  if (sum(ok) < min_years) {
+    return(list(r = NA_real_, rmse = NA_real_, rmsess = NA_real_, n = sum(ok)))
+  }
+  obs <- obs[ok]
+  pred <- pred[ok]
+  rmse <- sqrt(mean((obs - pred)^2))
+  clim <- mean(obs)
+  rmse_clim <- sqrt(mean((obs - clim)^2))
+  list(
+    r = stats::cor(obs, pred),
+    rmse = rmse,
+    rmsess = if (rmse_clim > 0) 1 - rmse / rmse_clim else NA_real_,
+    n = sum(ok)
+  )
+}
+
+val_idx_recon <- match(val_years, recon$time)
+val_idx_tgt   <- match(val_years, reconstruction.target$time)
+cal_idx_recon <- match(cal_years, recon$time)
+cal_idx_tgt   <- match(cal_years, reconstruction.target$time)
+
+for (i in seq_len(nx)) {
+  for (j in seq_len(ny)) {
+    # Validation period (main result of this exercise)
+    obs_val <- reconstruction.target$data[i, j, val_idx_tgt]
+    pred_val <- recon$data[i, j, val_idx_recon]
+    s_val <- score_cell(obs_val, pred_val)
+    r_val[i, j]    <- s_val$r
+    rmse_val[i, j] <- s_val$rmse
+    rmsess[i, j]   <- s_val$rmsess
+
+    # Calibration period (for comparison maps — how well do we fit the tuning period?)
+    obs_cal <- reconstruction.target$data[i, j, cal_idx_tgt]
+    pred_cal <- recon$data[i, j, cal_idx_recon]
+    s_cal <- score_cell(obs_cal, pred_cal)
+    r_cal[i, j]      <- s_cal$r
+    rmse_cal[i, j]   <- s_cal$rmse
+    rmsess_cal[i, j] <- s_cal$rmsess
+  }
+}
+
+cat("Grid cells with validation skill (≥", min_years, "years):", sum(!is.na(r_val)), "of", nx * ny, "\n")
+```
+
+```{r summary table}
+skill_summary <- data.frame(
+  period = rep(c("Validation 1901–1940", "Calibration 1941–2000"), each = 3),
+  metric = rep(c("median r", "median RMSE (°C)", "median RMSESS"), 2),
+  value = c(
+    median(r_val, na.rm = TRUE),
+    median(rmse_val, na.rm = TRUE),
+    median(rmsess, na.rm = TRUE),
+    median(r_cal, na.rm = TRUE),
+    median(rmse_cal, na.rm = TRUE),
+    median(rmsess_cal, na.rm = TRUE)
+  )
+)
+skill_summary$value <- round(skill_summary$value, 3)
+print(skill_summary)
+```
+
+**Read the numbers carefully:** median grid-cell **r ≈ 0.2–0.3** is modest — many cells are poorly constrained by tree rings (especially oceans, where recon is often `NA`). That is very different from Exercise 6 (station regression), where **r_val ≈ 0.9** was achievable.
+
+##### 2. Domain mean — use the index reconstruction from Master_CFR
+
+For the **NH extratropics spatial mean**, do not simply average all grid cells. Exercise 14 already produced `spatmean_recon` (latitude-weighted index from the workflow). Compare that to the **latitude-weighted CRUTEM mean** — same definition as in `Master_CFR.R`.
+
+```{r lat-weighted domain mean}
+lat_w <- cos(reconstruction.target$lat * pi / 180)^0.5
+W <- outer(rep(1, nx), lat_w)
+
+weighted_field_mean <- function(field, time_idx) {
+  vapply(time_idx, function(t) {
+    slice <- field[, , t]
+    ok <- !is.na(slice)
+    if (!any(ok)) return(NA_real_)
+    sum(slice[ok] * W[ok]) / sum(W[ok])
+  }, numeric(1))
+}
+
+obs_index  <- weighted_field_mean(reconstruction.target$data, val_idx_tgt)
+pred_index <- as.numeric(spatmean_recon[val_idx_recon])
+ok_idx     <- complete.cases(obs_index, pred_index)
+
+r_index      <- stats::cor(obs_index[ok_idx], pred_index[ok_idx])
+rmse_index   <- sqrt(mean((obs_index[ok_idx] - pred_index[ok_idx])^2))
+clim_index   <- mean(obs_index[ok_idx])
+rmse_clim_ix <- sqrt(mean((obs_index[ok_idx] - clim_index)^2))
+rmsess_index <- 1 - rmse_index / rmse_clim_ix
+
+cat("Latitude-weighted index validation 1901–1940:\n")
+cat("  r =", round(r_index, 3), "| RMSE =", round(rmse_index, 3), "°C | RMSESS =", round(rmsess_index, 3), "\n")
+```
+
+This index skill is usually **much higher** than the median grid-cell skill — the mean integrates information across proxy-rich land areas.
+
+```{r index ts plot}
+ts_ix <- data.frame(
+  year = val_years[ok_idx],
+  value = c(obs_index[ok_idx], pred_index[ok_idx]),
+  series = rep(c("CRUTEM (lat-weighted)", "CFR index (spatmean_recon)"), each = sum(ok_idx))
+)
+
+ggplot(ts_ix, aes(x = year, y = value, colour = series)) +
+  geom_hline(yintercept = 0, colour = "grey80", linewidth = 0.3) +
+  geom_line(linewidth = 0.75) +
+  scale_colour_manual(values = c("CRUTEM (lat-weighted)" = "#2c6e8a", "CFR index (spatmean_recon)" = "#c0392b")) +
+  labs(
+    title = "Independent validation — latitude-weighted spatial mean",
+    subtitle = sprintf("1901–1940 | r = %.2f | RMSESS = %.2f", r_index, rmsess_index),
+    x = "Year", y = "JJA anomaly (°C)", colour = NULL
+  ) +
+  theme_clim() +
+  theme(legend.position = "top")
+```
+
+##### 3. Skill maps (as in the original exercise template)
+
+```{r map helpers}
+world <- load_world_coastline("../Data/world_coastline.dat")
+
+skill_to_df <- function(arr) {
+  df <- expand.grid(lon = recon$lon, lat = recon$lat)
+  df$value <- as.vector(arr)
+  df
+}
+
+plot_skill_map <- function(arr, title, limits, mid = 0, palette = "diverging") {
+  df <- skill_to_df(arr)
+  p <- ggplot() +
+    geom_tile(data = df, aes(x = lon, y = lat, fill = value)) +
+    geom_path(data = world, aes(x = lon, y = lat, group = seg), inherit.aes = FALSE,
+              colour = "grey35", linewidth = 0.15) +
+    coord_fixed(ratio = 1.35, xlim = c(lon_recon_W, lon_recon_E), ylim = c(lat_recon_S, lat_recon_N)) +
+    labs(title = title, x = "Longitude", y = "Latitude", fill = NULL) +
+    theme_clim()
+  if (palette == "diverging") {
+    p + scale_fill_gradient2(
+      low = "#2166ac", mid = "white", high = "#b2182b",
+      midpoint = mid, limits = limits, oob = scales::squish, na.value = "grey92"
+    )
+  } else {
+    p + scale_fill_distiller(
+      palette = "YlOrRd", direction = 1,
+      limits = limits, oob = scales::squish, na.value = "grey92"
+    )
+  }
+}
+```
+
+```{r skill maps}
+rmse_cap <- stats::quantile(rmse_val, 0.95, na.rm = TRUE)
+
+plot_skill_map(r_cal, "r — calibration (1941–2000)", limits = c(-1, 1))
+plot_skill_map(r_val, "r — validation (1901–1940)", limits = c(-1, 1))
+plot_skill_map(rmse_val, "RMSE — validation (1901–1940)", limits = c(0, rmse_cap), palette = "sequential")
+plot_skill_map(rmsess, "RMSESS — validation (1901–1940)", limits = c(-0.5, 1))
+```
+
+Grey cells = no skill computed (too few overlapping years or missing recon).
+
+##### 4. Calibration vs validation
+
+```{r cal vs val facet}
+compare_df <- rbind(
+  data.frame(skill_to_df(r_cal), period = "Calibration 1941–2000"),
+  data.frame(skill_to_df(r_val), period = "Validation 1901–1940")
+)
+
+ggplot(compare_df, aes(x = lon, y = lat, fill = value)) +
+  geom_tile() +
+  geom_path(data = world, aes(x = lon, y = lat, group = seg), inherit.aes = FALSE,
+            colour = "grey35", linewidth = 0.12) +
+  scale_fill_gradient2(
+    low = "#2166ac", mid = "white", high = "#b2182b",
+    midpoint = 0, limits = c(-1, 1), oob = scales::squish, na.value = "grey92",
+    name = "Correlation r"
+  ) +
+  facet_wrap(~period, ncol = 2) +
+  coord_fixed(ratio = 1.2) +
+  labs(
+    title = "Where does the reconstruction work?",
+    subtitle = "Compare proxy-rich land (Europe, N America) to unconstrained regions",
+    x = "Longitude", y = "Latitude"
+  ) +
+  theme_clim()
+```
+
+## Interpretation
+
+1. **Validation is the point** — calibration maps show how the method fits the tuning period; validation maps show whether it generalises to **1901–1940**.
+2. **Use the right target for the domain mean** — `spatmean_recon` vs latitude-weighted CRUTEM, not an unweighted grid average.
+3. **Grid-cell skill is often weak** — PCR spreads proxy information smoothly; many cells have no local proxy constraint (`NA` in recon).
+4. **RMSESS < 0** at a cell means: predicting the local validation mean would have been better than using the reconstruction.

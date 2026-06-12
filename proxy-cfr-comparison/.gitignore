@@ -1,0 +1,8 @@
+_site/
+.quarto/
+output/
+*.rds
+.DS_Store
+
+/.quarto/
+**/*.quarto_ipynb

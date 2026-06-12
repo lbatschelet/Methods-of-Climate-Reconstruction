@@ -1,0 +1,106 @@
+---
+title: "Regression instead of the mean"
+output: html_notebook
+---
+
+### Exercise 5: European temperature reconstruction with regression instead of the mean
+  
+Empty memory, set working directory and load functions, libraries and data from previous exercises
+
+```{r}
+rm(list=ls())
+if (dir.exists("Exercises")) setwd("Exercises")
+load(file = "../Data/workspace_ex4.RData")
+```
+
+#### European temperature reconstruction with regression instead of mean. The target is the known EU mean from gridded data. We assume this to be the best estimate of the truth
+
+```{r}
+Y <- as.numeric(EUlonggridmean_latwgt)
+X <- as.data.frame(station_longEU)
+summary(lm(Y ~ ., data = X, na.action = na.omit))
+```
+
+What is the issue with the regression model here?
+
+**Answer:** The model uses all 129 long European stations as simultaneous predictors but only 115 years are available — and because of missing values in many series, `lm()` retains only **32 complete years**. That gives far more predictors (129) than independent observations (32), so the fit is **severely overdetermined** (R² = 1, residual df = 0). The regression can interpolate the target perfectly in-sample but has **no meaningful predictive skill**; coefficients are unstable, many stations are redundant (multicollinearity), and the model would fail completely out-of-sample. This is the same problem as using a changing station network without regularisation: too many degrees of freedom relative to information content.
+
+
+#### Select a few stations spread over Europe instead
+
+```{r}
+posSW_EUstat <- which(station_longEUlon > -10 & station_longEUlon < 0 &
+                        station_longEUlat > 30 & station_longEUlat < 50)
+posSE_EUstat <- which(station_longEUlon >= 0 & station_longEUlon < 20 &
+                        station_longEUlat > 30 & station_longEUlat < 50)
+posNW_EUstat <- which(station_longEUlon > -10 & station_longEUlon < 10 &
+                        station_longEUlat >= 50 & station_longEUlat < 70)
+posNE_EUstat <- which(station_longEUlon >= 10 & station_longEUlon < 40 &
+                        station_longEUlat >= 50 & station_longEUlat < 70)
+
+# Pick the station in each region with highest univariate correlation to Y
+pick_best <- function(pos) {
+  pos[which.max(sapply(pos, function(i) {
+    abs(cor(Y, station_longEU[, i], use = "pairwise.complete.obs"))
+  }))]
+}
+
+idx_SW <- pick_best(posSW_EUstat)
+idx_SE <- pick_best(posSE_EUstat)
+idx_NW <- pick_best(posNW_EUstat)
+idx_NE <- pick_best(posNE_EUstat)
+
+# Best geographic spread (one station per quadrant; indices from regional search)
+idx_SW; idx_SE; idx_NW; idx_NE
+station_longEUlon[c(idx_SW, idx_SE, idx_NW, idx_NE)]
+station_longEUlat[c(idx_SW, idx_SE, idx_NW, idx_NE)]
+
+Y <- as.numeric(EUlonggridmean_latwgt)
+X <- as.data.frame(station_longEU[, c(idx_SW, idx_SE, idx_NW, idx_NE)])
+
+fit <- lm(Y ~ ., data = X, na.action = na.omit)
+summary(fit)
+length(fit$fitted.values)
+yhat <- fitted(fit)
+cor(Y[as.numeric(names(yhat))], yhat)
+
+plot(station_abs_annmean$time[as.numeric(names(yhat))], yhat, ty = "l",
+     xlab = "Year", ylab = "Temperature (°C)",
+     main = "4-station regression vs lat-weighted EU grid mean")
+lines(station_abs_annmean$time, Y, col = "red")
+legend("topleft", legend = c("regression", "grid mean"), col = c("black", "red"), lty = 1)
+```
+
+What is the result and why is it better/worse?
+
+**Answer:** The four-station model (SW Spain, SE Austria, NW Germany, NE Baltic/west Russia) reaches **r ≈ 0.96** with the lat-weighted CRUTEM EU mean — comparable to the full 129-station network mean from Exercise 4 (r ≈ 0.95) but with only four predictors. It is **much better** than the all-station regression because the problem is well-conditioned: few parameters, interpretable coefficients, and stations chosen to represent different climate zones. Remaining limitations: (1) stations are still not area-weighted (dense networks in central Europe overweight that region); (2) a few missing years reduce the calibration sample slightly; (3) performance is tuned to this specific target and period.
+
+
+#### Minimal model: three stations
+
+A broader search over regional combinations shows that **three** well-placed stations already capture most variance — and perform slightly better than the four-station regional model. Below is the best 3-station subset (SE + NW + NE).
+
+```{r}
+idx_3 <- c(100, 87, 98)   # Slovenia, Norway, Ukraine
+X3 <- as.data.frame(station_longEU[, idx_3])
+fit3 <- lm(Y ~ ., data = X3, na.action = na.omit)
+summary(fit3)
+yhat3 <- fitted(fit3)
+cor(Y[as.numeric(names(yhat3))], yhat3)
+
+plot(station_abs_annmean$time[as.numeric(names(yhat3))], yhat3, ty = "l",
+     xlab = "Year", ylab = "Temperature (°C)",
+     main = "3-station regression vs lat-weighted EU grid mean")
+lines(station_abs_annmean$time, Y, col = "red")
+legend("topleft", legend = c("3-station regression", "grid mean"),
+       col = c("black", "red"), lty = 1)
+```
+
+**Answer (minimal model):** Three stations (Slovenia, Norway, Ukraine) achieve **r ≈ 0.97** — slightly better than the four-station regional model and far better than a simple unweighted mean of all European stations (r ≈ 0.55 for absolutes in Ex. 4). This is the best trade-off between parsimony and skill: each station carries independent regional information (southeastern/central Europe, Scandinavia, eastern Europe). Going down to two stations drops skill to r ≈ 0.92. **Recommendation:** use the **3-station regression** as the preferred minimal model; using all 129 stations in one regression is unnecessary and statistically invalid.
+
+
+Save entire workspace to continue with it in the following exercise or if you close R or if R crashes
+```{r}
+save.image(file = "../Data/workspace_ex5.RData")
+```
+

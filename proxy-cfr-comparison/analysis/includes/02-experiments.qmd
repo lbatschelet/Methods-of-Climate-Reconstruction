@@ -1,0 +1,54 @@
+
+```{r}
+#| label: experiment-plan
+
+knitr::kable(
+  EXPERIMENT_PLAN[EXPERIMENT_PLAN$run, ],
+  caption = if (exists("cap_experiment_plan")) cap_experiment_plan else "Experiment matrix"
+)
+```
+
+```{r}
+#| label: select-experiments
+
+if (quick_run) {
+  selected <- data.frame(
+    network_id = c("dod2k_speleothems", "dod2k_speleo_trees", "ntrend_trees"),
+    calibration_id = rep("course_split", 3L),
+    stringsAsFactors = FALSE
+  )
+} else {
+  selected <- EXPERIMENT_PLAN[EXPERIMENT_PLAN$run, c("network_id", "calibration_id")]
+}
+
+selected$experiment_id <- paste(selected$network_id, selected$calibration_id, sep = "__")
+knitr::kable(
+  selected,
+  caption = if (exists("cap_selected")) cap_selected else "Selected experiments"
+)
+```
+
+```{r}
+#| label: run-cfr
+#| cache: true
+
+results <- setNames(vector("list", nrow(selected)), selected$experiment_id)
+
+for (i in seq_len(nrow(selected))) {
+  id <- selected$experiment_id[i]
+  message("=== ", id, " ===")
+  results[[id]] <- run_cfr_experiment(
+    network_id = selected$network_id[i],
+    calibration_id = selected$calibration_id[i],
+    overwrite = overwrite_cfr
+  )
+}
+
+ok <- vapply(results, function(x) is.null(x$error), logical(1))
+if (!any(ok)) {
+  stop("All CFR experiments failed.")
+}
+if (!all(ok)) {
+  warning("Some experiments failed: ", paste(names(results)[!ok], collapse = ", "))
+}
+```
