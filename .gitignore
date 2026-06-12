@@ -1,0 +1,30 @@
+# R / RStudio
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.nb.html
+
+# Local R library (optional vendored packages)
+R_libs/
+
+# Python venv & cloned DoD2k toolkit (see scripts/setup_dod2k_repo.sh)
+proxy-cfr-comparison/.venv/
+external/
+
+# OS / editor
+.DS_Store
+.cursor/
+
+# Quarto
+proxy-cfr-comparison/_site/
+proxy-cfr-comparison/.quarto/
+proxy-cfr-comparison/output/*.html
+**/.quarto/
+
+# Project outputs (reproducible from source)
+proxy-cfr-comparison/output/
+
+# CFR run artefacts written into course exercises by Master_CFR.R
+course/exercises/PFR_*/
+course/exercises/Test_reconstruction_*/

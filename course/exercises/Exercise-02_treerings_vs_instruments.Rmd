@@ -1,0 +1,250 @@
+---
+title: "Compare tree-ring to instrumental data"
+output: html_notebook
+---
+
+### Exercise 2: Compare the tree-ring data from Tronador to data from the the nearest instrumental station. Find the climate variable and month/seasonal window with the best match.
+
+empty memory, set working directory and load functions, libraries
+
+```{r}
+rm(list=ls())
+# install.packages("readxl") # run this command the first time you use this script to install the required package.
+library(readxl)    # package to read in Excel data
+
+# If starting from the project root (R console), switch to Exercises/ once:
+if (dir.exists("Exercises")) setwd("Exercises")
+
+workdir <- getwd()
+source(paste0(workdir, "/functions_clim_recon.R"))
+```
+
+#### 2.1 Load tree-ring data
+
+First we load the tree-ring data from Tronador, Argentina to the workspace
+
+Use the **Gruppe 1 compound chronology** built in Exercise 1 (`HAT_Gruppe1-arge087-compound.csv`). Run section 1.9 of Exercise 1 first if this file does not exist yet.
+
+```{r read in the treering data}
+# read the data from file
+trees <- as.matrix(read.table(paste0("../Data/HAT_Gruppe1-arge087-compound.csv"), sep = ",", header = T))
+
+# convert chronology into time series
+trees <- ts(trees[, 2], start = trees[1, 1])
+
+#check the time range
+tsp(trees)
+
+#make a simple plot
+plot(trees)
+
+
+```
+
+#### 2.2 Load instrumental data
+
+We now load the instrumental temperature data from the nearest meteorological station, which is Bariloche, Argentina
+
+```{r read in the temperature data}
+# read the temperature data from file
+temp.bariloche <- read_excel(paste0("../Data/QWA_FICU_Tronador_Klimadaten.xlsx"), range = "Tmp_Bariloche!A2:U122", col_names = T)
+
+# convert into time series and confine to 1931 to 2021, where data are available
+temp.bariloche <- ts(as.matrix(temp.bariloche[, -1]), start = temp.bariloche[1, 1])
+temp.bariloche <- window(temp.bariloche, start = 1931)
+
+#check the time range
+tsp(temp.bariloche)
+
+#check the available months and seasonal windows
+colnames(temp.bariloche)
+
+#make a simple plot
+plot(temp.bariloche[, 1:10], type = "s", col = 1:20)
+
+```
+
+We also have data for precipitation and two drought indices (PDSI and SPEI). So we read in these as well.
+
+```{r read other variables}
+#For an easier analysis of the data we set up a list and each variable will be one element of the list.
+instr.bariloche <- list()
+
+#make temperature the first element of the list
+instr.bariloche[[1]] <- temp.bariloche
+#name this list element
+names(instr.bariloche)[[1]] <- "temperature"
+
+
+# now we repeat this to load also precipitation, PDSI and SPEI
+instr.variables <- c("precipitation", "PDSI", "SPEI") #how the variables should be named
+instr.ranges <- c("Precip_Bariloche!A2:Q119", "scPDSI!A2:Q119", "SPEI1!A2:Q119") #sheets and cell range where the data are stored in the excel file
+
+for (i in 2:4) { # make a loop to read all variables
+  indata <- read_excel(paste0("../Data/QWA_FICU_Tronador_Klimadaten.xlsx"), range = instr.ranges[i - 1], col_names = T)
+  indata <- ts(as.matrix(indata[, -1]), start = indata[1, 1])
+  indata <- window(indata, start = 1931)
+
+  instr.bariloche[[i]] <- indata
+  names(instr.bariloche)[[i]] <- instr.variables[i - 1]
+
+}
+
+
+```
+
+#### 2.3 Find the best matching instrumental variable and season
+
+We simply do this by checking the correlations between tree-rings and climate and search for the season with the highest value. According to the original research paper, the best correlation with temperature can be found in the year prior to the growing season. Therefore we shift the temperature data by one year prior to calculating the correlations. We also do this for the drought indices, but not for precipitation
+
+**Task 1: Which month or season correlates best with the tree-rings? Run the script below and write down your results (correlation value and season/month**
+
+```{r treerings vs. temperature}
+# Shift the instrumental data by one year (except for precipitation, where the correlation with the current year is better)
+instr.bariloche.shifted <- instr.bariloche
+for (i in c("temperature", "PDSI", "SPEI")) {
+  instr.bariloche.shifted[[i]] <- ts(instr.bariloche[[i]], start = start(instr.bariloche[[i]])[1] + 1)
+}
+
+#now we correlate the tree-ring data with temperature
+cors.tree.temp.shifted <- cor(cbind(trees, instr.bariloche.shifted[["temperature"]]), use = "pairwise.complete.obs")
+
+cors.tree.temp.shifted[, 1] #write out the correlations
+
+plot(cors.tree.temp.shifted[-1, 1]) # plot the correlations
+abline(h = 0) #horizontal line at 0
+
+#identify the maximum correlation
+max(cors.tree.temp.shifted[-1, 1]) #print the maximum value
+cors.tree.temp.shifted.max.season <- which.max(cors.tree.temp.shifted[-1, 1]) # find the index of the maximum value
+colnames(temp.bariloche)[cors.tree.temp.shifted.max.season] #print the season name of the maximum value
+
+# same as above but allowing also negative values, i.e. find the highest absolute correlation
+max(abs(cors.tree.temp.shifted[-1, 1])) #print the maximum value
+cors.tree.temp.shifted.max.season.abs <- which.max(abs(cors.tree.temp.shifted[-1, 1])) # find the index of teh maximum value
+colnames(temp.bariloche)[cors.tree.temp.shifted.max.season.abs] #print the season name of the maximum value
+
+```
+
+**Answer (Task 1):** With temperature shifted by one year, the strongest relationship is **DJF (previous-year summer) with r = -0.28**. The highest *positive* correlation is **Mar (r ≈ 0.11)**. The negative DJF correlation means wider rings tend to follow cooler previous summers. This is consistent with the paper's expectation that temperature in the year before the growing season matters, though the correlation is weaker than for the full-class chronology because Gruppe 1 has only six cores.
+
+Now we repeat the comparison for the other three variables, which represent hydroclimte (precipitation, PDSI, SPEI).
+
+**Task 2: Which variable (and sesaon) has the best relationship with tree-growth? Run the script below for the other variables and write down your results**
+
+```{r treerings vs. hydroclimate}
+hydro.vars <- c("precipitation", "PDSI", "SPEI")
+
+for (i in hydro.vars) {
+  cors.tree.instr.shifted <- cor(cbind(trees, instr.bariloche.shifted[[i]]), use = "pairwise.complete.obs")
+
+  cat("\n=== ", i, " ===\n", sep = "")
+  print(round(cors.tree.instr.shifted[-1, 1], 3))
+
+  plot(cors.tree.instr.shifted[-1, 1], main = i)
+  abline(h = 0)
+
+  cat("Max r:", round(max(cors.tree.instr.shifted[-1, 1]), 3), "->",
+      colnames(instr.bariloche[[i]])[which.max(cors.tree.instr.shifted[-1, 1])], "\n")
+  cat("Max |r|:", round(max(abs(cors.tree.instr.shifted[-1, 1])), 3), "->",
+      colnames(instr.bariloche[[i]])[which.max(abs(cors.tree.instr.shifted[-1, 1]))], "\n")
+}
+
+```
+
+**Answer (Task 2):**
+
+| Variable | Best season (max r) | r | Max \|r\| | Season |
+|---|---|---:|---:|---|
+| precipitation | Jan | 0.15 | **0.34** | **Aug** |
+| PDSI (shifted) | DJF | 0.22 | 0.22 | DJF |
+| SPEI (shifted) | DJF | 0.25 | 0.25 | DJF |
+| temperature (shifted) | Mar | 0.11 | 0.28 | DJF |
+
+For Gruppe 1, **August precipitation (current year)** shows the strongest overall relationship (**r = -0.34**): wetter Augusts are associated with narrower rings (or vice versa after sign flip). Among shifted variables, **SPEI DJF** (r = 0.25) and **temperature DJF** (r = -0.28) are also relevant. The best predictor differs slightly from the full dataset — with fewer cores, moisture in late winter/spring (Aug precipitation) emerges slightly stronger than temperature.
+
+Now we extract the best matching instrumental time series into a new variable
+
+**Task 3: replace BESTVARIABLE and BESTSEASON in the script below with the variable and season of your choice! (For example "PDSI" and "JJA")**
+
+```{r best matching climate time series}
+instr.best <- instr.bariloche[["precipitation"]][, "Aug"]
+
+# Tree rings must be multiplied by -1 because the best correlation is negative
+trees.cal <- trees * -1
+
+```
+
+**Answer (Task 3):** Best match for Gruppe 1: **precipitation**, season **Aug** (current year, not shifted). `trees.cal <- trees * -1` because r < 0.
+
+#### 2.4 Visually compare tree rings to instruments
+
+**Task 4: Discuss the visual comparison of the two time series with regards to a potential climate reconstruction.**
+
+```{r compare trees and instruments}
+#first plot the two time series
+# instruments in black, trees in red
+plot(cbind(instr.best, trees.cal), plot.type = "s", col = 1:2)
+
+#this is not very helpful because of the different length and unit of the time series
+
+#cut to the overlapping period and scale to the same mean and std.dev for better visual comparison
+plot(scale(window(cbind(instr.best, trees.cal), 1931)), plot.type = "s", col = 1:2)
+
+#now make another figure, showing filtered data to compare (multi-)decadal fluctuations
+
+plot(tsfilt(scale(window(cbind(instr.best, trees.cal), 1931)), 21, "bw"), plot.type = "s", col = 1:2)
+
+```
+
+**Answer (Task 4):** Raw plots are hard to compare because of different units and record lengths. After scaling to the overlap period (1931–2020), year-to-year agreement is weak to moderate (calibration r ≈ 0.34 for August precipitation). The 21-year Butterworth filter shows some common decadal variability, but the tree-ring series is noisier. With only six Gruppe-1 cores in the chronology, the climate signal is less clear than in a full multi-group composite. A reconstruction of August precipitation may be possible for low-frequency trends, but high-frequency fidelity is limited.
+
+#### 2.5 Simple climate reconstruction
+
+We now make the simplest possible climate reconstruction, by just scaling the treering data to the mean and standard deviation of the instrumental target data over the common period of overlap.
+
+**Task 5: Discuss the reconstruction and potential issues and challenges.**
+
+```{r simple recon}
+# Tree-ring data are flipped because the best precipitation correlation is negative
+
+#get the required scaling factor by deviding the two standard deviations
+scaling.factor <- sd(window(trees.cal, 1932, 2021)) / sd(window(instr.best, 1932, 2021), na.rm = T)
+
+#now scale the treerings to the std.dev. of the target
+simple.recon <- trees.cal / scaling.factor
+
+#to adjust the mean, we need to get the difference
+shift <- mean(window(simple.recon, 1932, 2021)) - mean(window(instr.best, 1932, 2021), na.rm = T)
+simple.recon <- simple.recon - shift
+
+#we can now plot the reconstruction along with the target
+plot(cbind(instr.best, simple.recon), type = "s", col = 1:2)
+
+#now the filtered time series
+plot(tsfilt(cbind(instr.best, simple.recon), 21, "bw"), type = "s", col = 1:2)
+
+#add some simple confidence interval using the RMSE
+diffvals <- instr.best - window(simple.recon, start = 1932)
+absdiffvals <- abs(diffvals)
+mse <- mean(absdiffvals^2, na.rm = T)
+rmse <- sqrt(mse)
+
+#plot reconstruction with CI
+plot(cbind(instr.best, simple.recon,
+           simple.recon + rmse,
+           simple.recon - rmse), type = "s", col = c(1, 2, 3, 3))
+
+```
+
+**Answer (Task 5):** The simple scaled reconstruction matches the calibration-period mean and variance of August precipitation (r ≈ 0.34). Low-pass filtered series show partial agreement on decadal scales, but the RMSE band is wide and pre-1931 values are unverified.
+
+**Main issues and challenges:**
+
+1. **Weak calibration** — r ≈ 0.34 explains only ~12% of variance; most growth variability is non-climatic.
+2. **Few cores** — Gruppe 1 has only six series; chronology signal is noisier than a full-class composite.
+3. **Short calibration period** (~90 years) — scaling may not hold over the full chronology back to 1211.
+4. **Sign reversal** — growth responds negatively to August precipitation; wrong sign would invert the reconstruction.
+5. **Simple scaling** — no regression, verification, or autocorrelation correction.
+6. **Spatial mismatch** — Bariloche station is not at the tree site.
+7. **Season/variable selection** — August precipitation was chosen from multiple trials; risk of overfitting without cross-validation.
