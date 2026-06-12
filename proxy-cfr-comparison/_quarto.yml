@@ -1,6 +1,7 @@
 project:
   type: default
   output-dir: output
+  pre-render: scripts/ensure_quarto_python.sh
 
 jupyter: dod2k-cfr
 

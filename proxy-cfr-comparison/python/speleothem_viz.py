@@ -22,6 +22,14 @@ SPELEO_PROXY_STYLE = {
 DEFAULT_STYLE = {"symbol": "diamond", "color": "#969696", "label": "other"}
 
 
+def _series_label(site: str, proxy_type: str, dataset_id: str) -> str:
+    style = _style_for(proxy_type)
+    name = (site or "").strip()
+    if not name or name == dataset_id or name == "nan":
+        name = dataset_id.replace("sisal_", "").replace("iso2k_", "").replace("pages2k_", "")
+    return f"{name} · {style['label']}"
+
+
 def speleothem_records(df: pd.DataFrame) -> pd.DataFrame:
     """One row per speleothem series with coverage stats."""
     sp = df.loc[df["archiveType"] == "Speleothem"].copy()
@@ -200,20 +208,25 @@ def build_speleothem_timeline(
     elif len(plot_df) > max_rows:
         plot_df = plot_df.nlargest(max_rows, "span_years")
 
-    plot_df = plot_df.sort_values(["proxy_type", "year_start"])
-    plot_df["label"] = plot_df["dataset_id"].str.replace("^sisal_", "", regex=True)
+    plot_df = plot_df.sort_values(["proxy_type", "year_start"], ascending=[True, True])
+    plot_df["label"] = plot_df.apply(
+        lambda r: _series_label(r["site"], r["proxy_type"], r["dataset_id"]),
+        axis=1,
+    )
 
     fig = go.Figure()
     for _, row in plot_df.iterrows():
         style = _style_for(row["proxy_type"])
         fig.add_trace(
-            go.Scatter(
-                x=[row["year_start"], row["year_end"]],
-                y=[row["label"], row["label"]],
-                mode="lines",
-                line=dict(color=style["color"], width=8),
+            go.Bar(
+                x=[row["span_years"]],
+                y=[row["label"]],
+                base=[row["year_start"]],
+                orientation="h",
+                marker=dict(color=style["color"], line=dict(width=0.4, color="#333333")),
                 hovertemplate=(
-                    f"<b>{row['dataset_id']}</b><br>"
+                    f"<b>{row['site']}</b><br>"
+                    f"{row['dataset_id']}<br>"
                     f"{row['year_start']}–{row['year_end']} CE<br>"
                     f"n = {row['n_years']}<extra></extra>"
                 ),
@@ -225,16 +238,17 @@ def build_speleothem_timeline(
         template="plotly_white",
         title=dict(
             text=(
-                f"<b>Temporal coverage</b> — {len(plot_df)} series "
-                f"(≥ {min_span_years} yr span where available)"
+                f"<b>Temporal coverage</b> — {len(plot_df)} longest series "
+                f"(≥ {min_span_years} yr span)"
             ),
             x=0.5,
             font=dict(size=16),
         ),
         xaxis=dict(title="Year (CE)", range=[YEAR_MIN, YEAR_MAX], dtick=250),
-        yaxis=dict(title="", automargin=True, tickfont=dict(size=9)),
+        yaxis=dict(title="", automargin=True, tickfont=dict(size=10), categoryorder="array",
+                   categoryarray=plot_df["label"].tolist()),
         barmode="overlay",
-        height=max(420, 12 * len(plot_df)),
+        height=max(480, 14 * len(plot_df)),
         margin=dict(l=10, r=20, t=50, b=40),
     )
     return fig

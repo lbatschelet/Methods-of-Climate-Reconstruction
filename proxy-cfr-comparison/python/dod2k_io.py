@@ -57,17 +57,28 @@ def _parse_array_string(text: str) -> np.ndarray:
     return np.array([float(x) for x in str(text).split(",") if x.strip()], dtype=np.float32)
 
 
+def _as_float_array(x) -> np.ndarray:
+    """Normalize a compact-CSV cell to a 1-D float array."""
+    if isinstance(x, np.ndarray):
+        return np.asarray(x, dtype=np.float32).ravel()
+    if isinstance(x, (list, tuple)):
+        if len(x) == 1 and isinstance(x[0], np.ndarray):
+            return np.asarray(x[0], dtype=np.float32).ravel()
+        return np.asarray(x, dtype=np.float32).ravel()
+    return _parse_array_string(x)
+
+
 def _read_compact_array_column(path: Path, key: str) -> pd.DataFrame:
     ids: list[str] = []
-    data: list[list[np.ndarray]] = []
+    data: list[np.ndarray] = []
     with path.open(newline="") as f:
         reader = csv.reader(f)
         for ii, row in enumerate(reader):
             if ii == 0:
                 continue
             ids.append(row[0])
-            data.append([_parse_array_string(",".join(row[1:]))])
-    return pd.DataFrame(np.array(data, dtype=object), index=ids, columns=[key])
+            data.append(_parse_array_string(",".join(row[1:])))
+    return pd.DataFrame({key: data}, index=ids)
 
 
 def _load_compact_pandas(data_dir: Path) -> pd.DataFrame:
@@ -88,10 +99,8 @@ def _load_compact_pandas(data_dir: Path) -> pd.DataFrame:
     df = meta.join(values).join(years)
     df["datasetId"] = df.index.astype(str)
     df.index = range(len(df))
-    df["year"] = df["year"].map(lambda x: x[0] if isinstance(x, (list, np.ndarray)) else _parse_array_string(x))
-    df["paleoData_values"] = df["paleoData_values"].map(
-        lambda x: x[0] if isinstance(x, (list, np.ndarray)) else _parse_array_string(x)
-    )
+    df["year"] = df["year"].map(_as_float_array)
+    df["paleoData_values"] = df["paleoData_values"].map(_as_float_array)
     df.name = prefix
     return df
 
@@ -171,18 +180,40 @@ def to_timeseries_tibble(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _write_parquet_bytes(tbl: pd.DataFrame, out: Path) -> None:
+    """
+    Write Parquet via in-memory buffer.
+
+    Avoids pyarrow LocalFileSystem registration issues in RStudio/reticulate
+    (ArrowKeyError: scheme 'file' already registered).
+    """
+    import io
+
+    buf = io.BytesIO()
+    tbl.to_parquet(buf, index=False, engine="pyarrow", compression="snappy")
+    out.write_bytes(buf.getvalue())
+
+
 def write_dod2k_cache(df: pd.DataFrame, cache_dir: str | Path) -> Path:
     """
     Export DoD2k to Parquet for R chunks (Quarto language bridge via files).
 
-    Writes ``dod2k_timeseries.parquet`` under *cache_dir*.
+    Writes ``dod2k_timeseries.parquet`` under *cache_dir* (CSV.gz fallback).
     """
     if pq is None:
         raise ImportError("pyarrow is required: pip install pyarrow")
 
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / "dod2k_timeseries.parquet"
+    parquet_out = cache_dir / "dod2k_timeseries.parquet"
+    csv_out = cache_dir / "dod2k_timeseries.csv.gz"
     tbl = to_timeseries_tibble(df)
-    pq.write_table(pa.Table.from_pandas(tbl, preserve_index=False), out)
-    return out
+
+    try:
+        _write_parquet_bytes(tbl, parquet_out)
+        return parquet_out
+    except Exception as parquet_err:
+        tbl.to_csv(csv_out, index=False, compression="gzip")
+        raise RuntimeError(
+            f"Parquet export failed ({parquet_err!r}); wrote CSV fallback to {csv_out}"
+        ) from parquet_err

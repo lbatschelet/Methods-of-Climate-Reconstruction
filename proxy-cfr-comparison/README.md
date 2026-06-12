@@ -20,18 +20,14 @@ Rscript -e "install.packages('arrow', repos='https://cloud.r-project.org')"
 
 R packages: **tidyverse**, **arrow**, **ggplot2**, **ncdf4**, **glue**, plus CFR deps (`foreach`, `doParallel`, `mvnfast`).
 
-Quarto uses kernel **`dod2k-cfr`** and `QUARTO_PYTHON` from `_environment` — no manual Python picker needed.
-
-```r
-source("R/load_project.R")
-load_project()   # loads tidyverse via analysis.qmd setup chunk
-```
+Quarto uses kernel **`dod2k-cfr`**. Setup writes a wrapper at `~/.quarto-env/bin/python` so plain `quarto render` works even with a global Quarto Python config.
 
 ## Render
 
 ```bash
-bash scripts/render.sh          # sets QUARTO_PYTHON to .venv (recommended)
-quarto preview analysis.qmd     # or preview in IDE after setup_python.sh
+cd proxy-cfr-comparison
+bash scripts/setup_python.sh   # once
+quarto render                  # or: bash scripts/render.sh
 ```
 
 Run chunks top-to-bottom: **setup-r** → **dod2k-load** (Python) → R sections.

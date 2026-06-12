@@ -47,6 +47,15 @@ if (!requireNamespace("arrow", quietly = TRUE)) {
 
 quick_run <- if (exists("params", inherits = TRUE)) params$quick_run else TRUE
 overwrite_cfr <- if (exists("params", inherits = TRUE)) params$overwrite_cfr else FALSE
+
+# RStudio: use Quarto "Run Cell" on {python} chunks (kernel dod2k-cfr), not reticulate::repl_python()
+if (requireNamespace("reticulate", quietly = TRUE)) {
+  venv <- file.path(
+    if (file.exists(".venv")) "." else "proxy-cfr-comparison",
+    ".venv"
+  )
+  if (dir.exists(venv)) reticulate::use_virtualenv(venv, required = FALSE)
+}
 ```
 
 # Introduction
@@ -60,7 +69,7 @@ Compare **climate field reconstructions (CFR)** across proxy networks (DoD2k spe
 
 DoD2k distinguishes **archive** (`archiveType`, e.g. Speleothem) from **measurement** (`paleoData_proxy`, e.g. δ18O, δ13C, growth rate, Mg/Ca). CFR below uses speleothem **δ18O** only; the map shows all four speleothem proxy types.
 
-**Setup:** `bash scripts/setup_python.sh` (creates `.venv`, installs deps, registers Jupyter kernel `dod2k-cfr`). R needs `arrow` for the Parquet bridge.
+**Setup (once):** `bash scripts/setup_python.sh` — then render or **Run All** on this file. Python chunks use the Jupyter kernel `dod2k-cfr` (not `reticulate::repl_python()`). R needs `arrow` for the Parquet bridge.
 
 # 1. DoD2k (Python)
 

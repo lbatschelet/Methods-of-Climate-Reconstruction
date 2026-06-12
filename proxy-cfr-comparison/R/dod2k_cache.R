@@ -1,24 +1,37 @@
 # Read DoD2k catalog exported by Quarto {python} chunks
 
-#' Path to DoD2k Parquet cache (written by Python)
+#' Paths to DoD2k cache files (written by Python)
+dod2k_cache_paths <- function(paths = project_paths()) {
+  dir <- paths$cache_dir
+  list(
+    parquet = file.path(dir, "dod2k_timeseries.parquet"),
+    csv = file.path(dir, "dod2k_timeseries.csv.gz")
+  )
+}
+
+#' @rdname dod2k_cache_paths
 dod2k_cache_path <- function(paths = project_paths()) {
-  file.path(paths$cache_dir, "dod2k_timeseries.parquet")
+  dod2k_cache_paths(paths)$parquet
 }
 
 #' Read long-format DoD2k timeseries (tibble)
 read_dod2k_catalog <- function(paths = project_paths()) {
-  path <- dod2k_cache_path(paths)
-  if (!file.exists(path)) {
+  files <- dod2k_cache_paths(paths)
+  if (file.exists(files$parquet)) {
+    if (!requireNamespace("arrow", quietly = TRUE)) {
+      stop("Package 'arrow' is required to read the DoD2k Parquet cache.")
+    }
+    raw <- arrow::read_parquet(files$parquet)
+  } else if (file.exists(files$csv)) {
+    raw <- readr::read_csv(files$csv, show_col_types = FALSE)
+  } else {
     stop(
-      "DoD2k cache not found at ", path, ". ",
-      "Run the Python chunk in analysis.qmd first (exports Parquet)."
+      "DoD2k cache not found (expected ", files$parquet, " or ", files$csv, "). ",
+      "Re-run the Python chunk `dod2k-load` in analysis.qmd."
     )
   }
-  if (!requireNamespace("arrow", quietly = TRUE)) {
-    stop("Package 'arrow' is required to read the DoD2k cache.")
-  }
 
-  arrow::read_parquet(path) |>
+  raw |>
     tibble::as_tibble() |>
     dplyr::mutate(
       dataset_id = as.character(.data$dataset_id),
