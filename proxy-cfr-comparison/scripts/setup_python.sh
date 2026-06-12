@@ -30,8 +30,8 @@ echo "==> Using Python: $PY"
 
 echo "==> Creating virtualenv at $ROOT/.venv"
 "$PY" -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r python/requirements.txt
+.venv/Scripts/pip install --upgrade pip
+.venv/Scripts/pip install -r python/requirements.txt
 
 SITE_PACKAGES="$(.venv/bin/python -c "import site; print(site.getsitepackages()[0])")"
 echo "$ROOT/python" > "$SITE_PACKAGES/proxy_cfr_project.pth"
