@@ -6,13 +6,12 @@ Quarto project comparing climate field reconstructions across proxy networks, wi
 
 ```
 proxy-cfr-comparison/
-├── _quarto.yml          # Website (EN + DE reports)
-├── index.qmd            # Bilingual landing page
+├── _quarto.yml          # Website
+├── index.qmd            # Landing page
 ├── R/                   # Analysis pipeline
 ├── config/              # Experiment definitions
 └── analysis/
-    ├── report-en.qmd
-    ├── report-de.qmd
+    ├── report.qmd
     └── includes/        # Shared code chunks
 ```
 

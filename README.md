@@ -10,17 +10,17 @@ Methods-of-Climate-Reconstruction/
 │   ├── data/
 │   ├── exercises/
 │   └── materials/
-└── proxy-cfr-comparison/        # Quarto analysis project (EN + DE)
+└── proxy-cfr-comparison/        # Quarto analysis project
     ├── _quarto.yml
     ├── index.qmd
     ├── R/
     └── analysis/
 ```
 
-| Part | Language | Description |
-|------|----------|-------------|
-| `course/` | Course language | Übungen, Daten, `Master_CFR.R` |
-| `proxy-cfr-comparison/` | EN + DE | DoD2k speleothem vs. tree-ring CFR comparison |
+| Part | Description |
+|------|-------------|
+| `course/` | Course data, exercises, `Master_CFR.R` |
+| `proxy-cfr-comparison/` | DoD2k speleothem vs. tree-ring CFR comparison (Quarto) |
 
 ## Quick start
 

@@ -3,8 +3,7 @@ project:
   output-dir: _site
   render:
     - index.qmd
-    - analysis/report-en.qmd
-    - analysis/report-de.qmd
+    - analysis/report.qmd
 
 website:
   title: "Proxy CFR Comparison"
@@ -13,10 +12,8 @@ website:
     left:
       - href: index.qmd
         text: Home
-      - href: analysis/report-en.qmd
-        text: Analysis (EN)
-      - href: analysis/report-de.qmd
-        text: Analyse (DE)
+      - href: analysis/report.qmd
+        text: Analysis
     right:
       - icon: github
         href: https://github.com/lbatschelet/Methods-of-Climate-Reconstruction
