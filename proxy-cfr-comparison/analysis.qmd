@@ -21,40 +21,36 @@ execute:
   message: false
 ---
 
-All R code lives in this notebook. Functions are defined in the **setup** chunk below and documented in **Roxygen style** (`#'` with `@param`, `@return`, `@details`).
+# Introduction
+
+Explore **DoD2k v2.0** speleothem records from [DoD2k](https://lluecke.github.io/dod2k/).
+
+DoD2k distinguishes **archive** (`archiveType`, e.g. Speleothem) from **measurement** (`paleoData_proxy`: δ18O, δ13C, growth rate, Mg/Ca). This notebook loads the compact CSV bundle, builds a long-format catalog, and plots an overview of speleothem sites.
 
 ```{r}
 #| label: setup
 #| include: false
 
-# =============================================================================
-# Setup — libraries, paths, DoD2k I/O, speleothem plots
-# =============================================================================
-#
-# Data flow:
-#   dod2k_v2.0 compact CSV  →  load_dod2k_compact()  →  one row per dataset
-#   compact                  →  compact_to_catalog()  →  long tibble (year × value)
-#   catalog                  →  saveRDS cache          →  fast reload on next run
-#
-# DoD2k field names (see https://lluecke.github.io/dod2k/):
-#   archiveType      — archive material (Speleothem, Wood, Coral, …)
-#   paleoData_proxy  — measurement type (d18O, d13C, growth rate, Mg/Ca, …)
-# =============================================================================
-
 library(tidyverse)
 library(glue)
 library(plotly)
+```
 
+# Load DoD2k data
 
-# --- Paths -------------------------------------------------------------------
+Data live in `course/data/dod2k_v2.0/`. The compact format stores one row per dataset; year and proxy values are comma-separated arrays in separate files.
+
+**Flow:** compact CSV → wide table (`load_dod2k_compact`) → long catalog (`load_dod2k_catalog`) → RDS cache for fast reload.
+
+## Paths and cache
+
+```{r}
+#| label: paths
+#| code-fold: true
 
 #' Find repository root containing `course/data/`.
 #'
-#' Walks upward from the working directory until `course/data` exists.
-#' Works when knitting from `proxy-cfr-comparison/` or the repo root.
-#'
-#' @return Character scalar — absolute path to the repository root.
-#' @throws Error if `course/data` cannot be found.
+#' @return Absolute path to the repository root.
 find_repo_root <- function() {
   candidates <- c(
     if (dir.exists("course/data")) normalizePath(".", mustWork = TRUE),
@@ -75,46 +71,43 @@ cache_dir <- file.path(proj_root, "output", "cache")
 cache_rds <- file.path(cache_dir, "dod2k_timeseries.rds")
 dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Reconstruction period on the DoD2k file axis (calendar years CE)
-year_min <- 0L
+year_min <- 0L   # reconstruction window (CE)
 year_max <- 2000L
+```
 
+## Compact CSV loader
 
-# --- DoD2k compact CSV parser ------------------------------------------------
+Three files are joined: metadata, year arrays, and proxy-value arrays.
 
-#' Parse one row from a DoD2k *compact array* CSV file.
+```{r}
+#| label: dod2k-loader
+#| code-fold: true
+
+#' Parse one line from a DoD2k compact array CSV (`id,val1,val2,…`).
 #'
-#' Compact files store comma-separated numeric arrays per dataset, e.g.
-#' `sisal_001,1000.0,1001.0,1002.0,…` (years or proxy values).
-#'
-#' @param line Character scalar — one line from the CSV (without header).
-#' @return Named list with `id` (dataset id) and `values` (numeric vector).
+#' @param line One CSV line (without header).
+#' @return List with `id` and numeric `values`.
 parse_array_line <- function(line) {
   parts <- strsplit(line, ",", fixed = TRUE)[[1]]
   list(id = parts[[1]], values = as.numeric(parts[-1]))
 }
 
-#' Read a DoD2k compact array column into a tibble.
+#' Read a compact array column into a tibble.
 #'
 #' @param path Path to e.g. `dod2k_v2.0_compact_year.csv`.
-#' @return Tibble with columns `dataset_id` and `values` (list of numeric vectors).
+#' @return Tibble: `dataset_id`, `values` (list of numeric vectors).
 read_array_column <- function(path) {
   lines <- readLines(path, warn = FALSE)
-  parsed <- lapply(lines[-1], parse_array_line)  # skip header row
+  parsed <- lapply(lines[-1], parse_array_line)
   tibble(
     dataset_id = vapply(parsed, `[[`, character(1), "id"),
     values = lapply(parsed, `[[`, "values")
   )
 }
 
-#' Load the DoD2k v2.0 compact CSV bundle (metadata + years + values).
+#' Load DoD2k v2.0 compact bundle — one row per dataset, list-columns for time series.
 #'
-#' Joins three files from `data_dir`:
-#' `_compact_metadata.csv`, `_compact_year.csv`, `_compact_paleoData_values.csv`.
-#'
-#' @return Tibble — one row per dataset; `year` and `paleoData_values` are list-columns
-#'   of numeric vectors (full time series per record).
-#' @details This is the *wide* representation. Use [compact_to_catalog()] for analysis.
+#' @return Wide tibble with metadata, `year`, and `paleoData_values`.
 load_dod2k_compact <- function() {
   prefix <- basename(data_dir)
   meta <- read_csv(
@@ -134,16 +127,20 @@ load_dod2k_compact <- function() {
     left_join(years, by = "dataset_id") |>
     left_join(values, by = "dataset_id")
 }
+```
 
-#' Convert compact DoD2k data to a long-format catalog.
-#'
-#' Expands list-columns into one row per `(dataset_id, year)` with a finite proxy value
-#' inside `[year_min, year_max]`.
+## Long-format catalog
+
+Expands list-columns to one row per `(dataset, year)` and caches the result as RDS.
+
+```{r}
+#| label: dod2k-catalog
+#| code-fold: true
+
+#' Convert compact data to a long catalog (0–2000 CE, finite values only).
 #'
 #' @param compact Output of [load_dod2k_compact()].
-#' @return Tibble with columns:
-#'   `dataset_id`, `year`, `value`, `lon`, `lat`, `archive_type`, `proxy_type`.
-#' @details Rows with missing or out-of-range years are dropped silently.
+#' @return Tibble: `dataset_id`, `year`, `value`, `lon`, `lat`, `archive_type`, `proxy_type`.
 compact_to_catalog <- function(compact) {
   rows <- vector("list", nrow(compact))
   n <- 0L
@@ -171,9 +168,9 @@ compact_to_catalog <- function(compact) {
   bind_rows(rows)
 }
 
-#' Read the cached long-format catalog from disk.
+#' Read cached catalog from `output/cache/dod2k_timeseries.rds`.
 #'
-#' @return Tibble or `NULL` if the RDS cache file does not exist yet.
+#' @return Tibble or `NULL` if cache does not exist.
 read_catalog_cache <- function() {
   if (!file.exists(cache_rds)) return(NULL)
   readRDS(cache_rds) |>
@@ -188,13 +185,10 @@ read_catalog_cache <- function() {
     )
 }
 
-#' Load (or build) the long-format DoD2k catalog.
+#' Load or build the long-format catalog.
 #'
-#' On first call, parses compact CSV and writes `output/cache/dod2k_timeseries.rds`.
-#' Subsequent calls read the cache unless `refresh = TRUE`.
-#'
-#' @param refresh Logical — if `TRUE`, rebuild cache from CSV even when RDS exists.
-#' @return Long-format catalog tibble (see [compact_to_catalog()]).
+#' @param refresh If `TRUE`, rebuild cache from CSV.
+#' @return Long-format catalog tibble.
 load_dod2k_catalog <- function(refresh = FALSE) {
   if (!refresh) {
     cached <- read_catalog_cache()
@@ -205,36 +199,67 @@ load_dod2k_catalog <- function(refresh = FALSE) {
   saveRDS(catalog, cache_rds)
   catalog
 }
+```
 
+## Archive summary
 
-# --- Speleothem constants (DoD2k legend) -------------------------------------
+First run builds the cache; later runs read RDS directly.
 
-#' Display order, labels, colours, and map symbols for speleothem proxy types.
+```{r}
+#| label: dod2k-load
+#| cache: true
+
+dod2k_compact <- load_dod2k_compact()
+catalog       <- load_dod2k_catalog()
+
+archive_summary <- dod2k_compact |>
+  count(archiveType, paleoData_proxy, name = "n", sort = TRUE) |>
+  rename(archive_type = archiveType, proxy_type = paleoData_proxy)
+
+glue(
+  "Records: {format(nrow(dod2k_compact), big.mark = ',')}  |  ",
+  "Speleothems: {sum(dod2k_compact$archiveType == 'Speleothem', na.rm = TRUE)}  |  ",
+  "δ18O: {sum(dod2k_compact$archiveType == 'Speleothem' & dod2k_compact$paleoData_proxy == 'd18O', na.rm = TRUE)}"
+)
+
+knitr::kable(head(archive_summary, 12), caption = "DoD2k archive × proxy (metadata)")
+```
+
+# Speleothem overview
+
+Filter `archiveType == "Speleothem"`. Four proxy types appear in DoD2k v2.0: δ18O, δ13C, growth rate, Mg/Ca.
+
+## Styling
+
+Shared colours, labels, and a minimal ggplot theme for the figures below.
+
+```{r}
+#| label: speleothem-config
+#| code-fold: true
+
 proxy_order   <- c("d18O", "d13C", "growth rate", "Mg/Ca")
 proxy_labels  <- c(d18O = "δ18O", d13C = "δ13C", `growth rate` = "growth rate", `Mg/Ca` = "Mg/Ca")
 proxy_colors  <- c(d18O = "#b2182b", d13C = "#d6604d", `growth rate` = "#f4a582", `Mg/Ca` = "#92c5de")
 proxy_symbols <- c(d18O = "triangle-up", d13C = "triangle-down", `growth rate` = "square", `Mg/Ca` = "circle")
 
-#' Minimal ggplot theme for overview figures.
-#'
-#' @return A [ggplot2::theme] object.
 theme_clean <- function() {
   theme_minimal() + theme(legend.position = "bottom")
 }
+```
 
+## Site tables
 
-# --- Speleothem tables -------------------------------------------------------
+**`n_metadata`** = rows in the archive; **`n_with_data`** = series with values in 0–2000 CE.
 
-#' Build one row per speleothem time series with site metadata.
+```{r}
+#| label: speleothem-helpers
+#| code-fold: true
+
+#' One row per speleothem series with site metadata.
 #'
-#' @param catalog Long-format catalog from [load_dod2k_catalog()].
-#' @param compact Wide compact table from [load_dod2k_compact()] (for site names).
-#' @return Tibble with columns:
-#'   `dataset_id`, `proxy_type`, `lon`, `lat`, `year_start`, `year_end`,
-#'   `n_years`, `span_years`, `site`.
-#' @details
-#'   `n_years` counts dated observations; `span_years` is calendar range
-#'   (last − first + 1) and can be much larger than `n_years`.
+#' @param catalog Long catalog from [load_dod2k_catalog()].
+#' @param compact Wide compact table (for site names).
+#' @return Tibble with `dataset_id`, coords, year range, `n_years`, `site`.
 speleothem_sites <- function(catalog, compact) {
   sites <- catalog |>
     filter(archive_type == "Speleothem") |>
@@ -244,8 +269,7 @@ speleothem_sites <- function(catalog, compact) {
       year_end = max(year),
       n_years = n(),
       .groups = "drop"
-    ) |>
-    mutate(span_years = year_end - year_start + 1L)
+    )
 
   meta <- compact |>
     filter(archiveType == "Speleothem") |>
@@ -260,10 +284,10 @@ speleothem_sites <- function(catalog, compact) {
     )
 }
 
-#' Count speleothem records in metadata vs. records with usable time series.
+#' Count metadata rows vs. series with usable time series, by proxy type.
 #'
-#' @param compact Wide compact table (metadata rows).
-#' @param catalog Long catalog (after year/value filtering).
+#' @param compact Wide compact table.
+#' @param catalog Long catalog.
 #' @return Tibble: `proxy_label`, `proxy_type`, `n_metadata`, `n_with_data`.
 speleothem_summary <- function(compact, catalog) {
   meta <- compact |>
@@ -287,17 +311,31 @@ speleothem_summary <- function(compact, catalog) {
     arrange(proxy_type) |>
     transmute(proxy_label, proxy_type, n_metadata, n_with_data)
 }
+```
 
+```{r}
+#| label: speleothem-summary
+#| cache: true
+#| dependson: dod2k-load
 
-# --- Speleothem plots --------------------------------------------------------
+speleo_sites <- speleothem_sites(catalog, dod2k_compact)
 
-#' Interactive world map of speleothem sites (plotly).
-#'
-#' Points are coloured and symbolled by `paleoData_proxy` (DoD2k legend).
-#' Hover shows site name, dataset id, proxy type, year range, and observation count.
+speleothem_summary(dod2k_compact, catalog) |>
+  knitr::kable(caption = "Speleothem proxy types")
+```
+
+## Site map
+
+Interactive world map — colour and symbol by proxy type; hover shows site name and year range.
+
+```{r}
+#| label: speleothem-map-fn
+#| code-fold: true
+
+#' Interactive plotly map of speleothem sites.
 #'
 #' @param sites Output of [speleothem_sites()].
-#' @return A plotly object (renders interactively in HTML).
+#' @return plotly object.
 plot_speleothem_map <- function(sites) {
   sites <- sites |>
     mutate(
@@ -337,15 +375,28 @@ plot_speleothem_map <- function(sites) {
     legend = list(orientation = "h", y = -0.05, x = 0.5, xanchor = "center")
   )
 }
+```
 
-#' Stacked bar chart — how many series have data in each time bin.
-#'
-#' Counts series with ≥1 observation per `(bin, proxy_type)`.
-#' Uses *actual dated years*, not calendar first/last year.
+```{r}
+#| label: speleothem-map
+#| dependson: speleothem-summary
+
+plot_speleothem_map(speleo_sites)
+```
+
+## Temporal coverage
+
+How many series have at least one dated value per 100-year bin (actual years, not calendar span).
+
+```{r}
+#| label: speleothem-density-fn
+#| code-fold: true
+
+#' Stacked bar chart — series count per time bin.
 #'
 #' @param catalog Long-format catalog.
-#' @param bin_width Width of time bins in years (default 100 = centuries).
-#' @return A ggplot object.
+#' @param bin_width Bin width in years (default 100).
+#' @return ggplot object.
 plot_speleothem_density <- function(catalog, bin_width = 100) {
   density <- catalog |>
     filter(archive_type == "Speleothem") |>
@@ -368,15 +419,28 @@ plot_speleothem_density <- function(catalog, bin_width = 100) {
     ) +
     theme_clean()
 }
+```
 
-#' Boxplot of observation counts per speleothem series.
-#'
-#' Shows `n_years` (number of dated values) by proxy type.
-#' Prefer this over calendar span — many series cover 0–2000 CE nominally
-#' but contain far fewer measurements.
+```{r}
+#| label: speleothem-density
+#| fig-cap: "Series with observations per century"
+#| dependson: speleothem-summary
+
+plot_speleothem_density(catalog)
+```
+
+## Temporal resolution
+
+Number of dated values per series — more informative than calendar first/last year.
+
+```{r}
+#| label: speleothem-resolution-fn
+#| code-fold: true
+
+#' Boxplot of observation counts per series.
 #'
 #' @param sites Output of [speleothem_sites()].
-#' @return A ggplot object.
+#' @return ggplot object.
 plot_speleothem_resolution <- function(sites) {
   ggplot(sites, aes(proxy_type, n_years, fill = proxy_type)) +
     geom_boxplot(outlier.size = 0.8, alpha = 0.85) +
@@ -391,77 +455,10 @@ plot_speleothem_resolution <- function(sites) {
 }
 ```
 
-# Introduction
-
-Explore **DoD2k v2.0** speleothem records from [DoD2k](https://lluecke.github.io/dod2k/).
-
-DoD2k distinguishes **archive** (`archiveType`, e.g. Speleothem) from **measurement** (`paleoData_proxy`: δ18O, δ13C, growth rate, Mg/Ca).
-
-# 1. Load DoD2k
-
-Data: `course/data/dod2k_v2.0/`. First run builds `output/cache/dod2k_timeseries.rds`; later runs are fast.
-
-```{r}
-#| label: dod2k-load
-#| cache: true
-
-# Wide metadata + list-columns (one row per dataset)
-dod2k_compact <- load_dod2k_compact()
-# Long catalog: one row per (dataset, year) with a finite value in 0–2000 CE
-catalog       <- load_dod2k_catalog()
-
-# Cross-tab of all archive types in the metadata (not only speleothems)
-archive_summary <- dod2k_compact |>
-  count(archiveType, paleoData_proxy, name = "n", sort = TRUE) |>
-  rename(archive_type = archiveType, proxy_type = paleoData_proxy)
-
-glue(
-  "Records: {format(nrow(dod2k_compact), big.mark = ',')}  |  ",
-  "Speleothems: {sum(dod2k_compact$archiveType == 'Speleothem', na.rm = TRUE)}  |  ",
-  "δ18O: {sum(dod2k_compact$archiveType == 'Speleothem' & dod2k_compact$paleoData_proxy == 'd18O', na.rm = TRUE)}"
-)
-
-knitr::kable(head(archive_summary, 12), caption = "DoD2k archive × proxy (metadata)")
-```
-
-# 2. Speleothem overview
-
-**`n_metadata`** = rows in the archive; **`n_with_data`** = series with values in 0–2000 CE.
-
-```{r}
-#| label: speleothem-summary
-#| cache: true
-#| dependson: dod2k-load
-
-# One row per speleothem series (site coords, year range, observation count)
-speleo_sites <- speleothem_sites(catalog, dod2k_compact)
-
-speleothem_summary(dod2k_compact, catalog) |>
-  knitr::kable(caption = "Speleothem proxy types")
-```
-
-```{r}
-#| label: speleothem-map
-#| dependson: speleothem-summary
-
-# Interactive plotly map — colour/symbol by proxy type
-plot_speleothem_map(speleo_sites)
-```
-
-```{r}
-#| label: speleothem-density
-#| fig-cap: "Series with observations per century"
-#| dependson: speleothem-summary
-
-# Temporal coverage: how many series have ≥1 dated value per 100-year bin
-plot_speleothem_density(catalog)
-```
-
 ```{r}
 #| label: speleothem-resolution
 #| fig-cap: "Dated values per series"
 #| dependson: speleothem-summary
 
-# Resolution: number of dated values per series (not calendar span)
 plot_speleothem_resolution(speleo_sites)
 ```
