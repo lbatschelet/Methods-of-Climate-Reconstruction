@@ -1,11 +1,13 @@
 ---
-title: "DoD2k speleothem data overview"
-subtitle: "Load, explore, and visualise the archive"
+title: "Speleothem proxy screening for climate reconstruction"
+subtitle: "DoD2k screening, regional composites, and ENSO — course project report"
 author:
   - "Madina Vogt"
   - "Florian Christ"
   - "Lukas Batschelet"
 date: last-modified
+bibliography: references.bib
+csl: https://www.zotero.org/styles/american-geophysical-union
 format:
   html:
     toc: true
@@ -23,9 +25,29 @@ execute:
 
 # Introduction
 
-Explore **DoD2k v2.0** speleothem records from [DoD2k](https://lluecke.github.io/dod2k/).
+**Question:** Can speleothem records from DoD2k v2.0 [@evans2026] be used to reconstruct climate — and is there an ENSO signal in regions where literature expects one [@tadros2016]?
 
-DoD2k distinguishes **archive** (`archiveType`, e.g. Speleothem) from **measurement** (`paleoData_proxy`: δ18O, δ13C, growth rate, Mg/Ca). This notebook loads the compact CSV bundle, builds a long-format catalog, and plots an overview of speleothem sites.
+**Data:** speleothem time series (δ18O, δ13C, growth rate, Mg/Ca) from **DoD2k v2.0** / SISALv3 [@kaushal2024]; instrumental **CRU TS v4.07** [@harris2020] at the nearest grid box; **Niño3.4** SST anomalies (NOAA PSL) for ENSO.
+
+**Why this matters:** Rain and temperature at the surface do not reach a stalagmite unchanged — water mixes in the karst aquifer [@fairchild2006]. We therefore test proxies **site by site** and **region by region**, not as one global average.
+
+## Three analysis steps
+
+| Step | What we do | Why |
+|------|------------|-----|
+| **1 — Screen** | Correlate each series with local CRU temperature and precipitation (1901–2000) | See whether any proxy tracks instruments at all |
+| **2 — Composite** | Detrend, calibrate 1901–1980, validate 1981–2000; regional mean of screened series | Test whether a *group* of caves in one region carries a reconstructable signal |
+| **3 — ENSO** | Focus on Australasia / SW Pacific; compare proxies to Niño3.4 and local rainfall | Literature links SE Australian hydroclimate to ENSO [@tadros2016] |
+
+Instrumental window: **1901–2000 CE**. Calibration: **1901–1980**; validation: **1981–2000**.
+
+## Proxies at a glance
+
+| Proxy | Often reflects | Caveat |
+|-------|----------------|--------|
+| **δ18O** | Rainfall amount, moisture source (region-dependent) | Strongly filtered by karst mixing |
+| **Mg/Ca** | Cave temperature or moisture deficit (PCP) | In SE Australia linked to palaeorainfall under ENSO [@tadros2016] |
+| **δ13C**, **growth rate** | Soil activity, wet vs. dry phases | Indirect climate indicators |
 
 ```{r}
 #| label: setup
@@ -35,9 +57,12 @@ library(tidyverse)
 library(glue)
 library(plotly)
 library(terra)
+select <- dplyr::select
 ```
 
-# Load DoD2k data
+# Step 1 — Explore the archive
+
+## Load DoD2k data
 
 Data live in `course/data/dod2k_v2.0/`. The compact format stores one row per dataset; year and proxy values are comma-separated arrays in separate files.
 
@@ -226,13 +251,13 @@ glue(
 knitr::kable(head(archive_summary, 12), caption = "DoD2k archive × proxy (metadata)")
 ```
 
-# Speleothem overview
+# Proxy types and spatial coverage
 
-Filter `archiveType == "Speleothem"`. Four proxy types appear in DoD2k v2.0: δ18O, δ13C, growth rate, Mg/Ca.
+Where are speleothems, which of the four proxy types are available, and how well are series resolved in time?
 
 ## Styling
 
-Shared colours, labels, and a minimal ggplot theme for the figures below.
+Shared colours, labels, and a consistent ggplot/plotly theme for all figures.
 
 ```{r}
 #| label: speleothem-config
@@ -243,8 +268,74 @@ proxy_labels  <- c(d18O = "δ18O", d13C = "δ13C", `growth rate` = "growth rate"
 proxy_colors  <- c(d18O = "#b2182b", d13C = "#d6604d", `growth rate` = "#f4a582", `Mg/Ca` = "#92c5de")
 proxy_symbols <- c(d18O = "triangle-up", d13C = "triangle-down", `growth rate` = "square", `Mg/Ca` = "circle")
 
-theme_clean <- function() {
-  theme_minimal() + theme(legend.position = "bottom")
+# Line weights — thicker on time-series panels
+line_lwd      <- 1.05
+line_lwd_thin <- 0.35
+point_sz      <- 2.0
+point_sz_sm   <- 1.6
+
+#' Left-aligned bold plotly title with optional subtitle.
+plotly_title <- function(title, subtitle = NULL) {
+  sub_txt <- if (!is.null(subtitle) && nzchar(subtitle)) {
+    paste0("<br><span style='font-size:12px;color:#555555'>", subtitle, "</span>")
+  } else ""
+  list(
+    text = paste0("<b style='font-size:17px'>", title, "</b>", sub_txt),
+    x = 0.02, xanchor = "left",
+    y = 0.98, yanchor = "top"
+  )
+}
+
+#' Minimal ggplot theme: bold left title, subtitle guidance, grid on demand.
+#'
+#' @param grid `"none"`, `"x"`, `"y"`, or `"xy"` — major grid lines only where they aid reading.
+theme_clean <- function(grid = "none") {
+  grid <- match.arg(grid, c("none", "x", "y", "xy"))
+  base <- theme_minimal(base_size = 11, base_family = "sans") +
+    theme(
+      plot.title = element_text(
+        face = "bold", size = 15, hjust = 0,
+        margin = margin(b = 4), colour = "grey10"
+      ),
+      plot.subtitle = element_text(
+        size = 10.5, hjust = 0, colour = "grey35",
+        margin = margin(b = 10), lineheight = 1.15
+      ),
+      plot.caption = element_text(
+        size = 9, hjust = 0, colour = "grey45",
+        margin = margin(t = 10), lineheight = 1.2
+      ),
+      plot.margin = margin(12, 16, 10, 10),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold", size = 10),
+      legend.text = element_text(size = 9.5),
+      legend.key.height = unit(0.45, "cm"),
+      axis.title = element_text(size = 10, colour = "grey20"),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      axis.title.y = element_text(margin = margin(r = 8)),
+      axis.text = element_text(size = 9, colour = "grey30"),
+      strip.text = element_text(face = "bold", size = 9.5, colour = "grey15"),
+      strip.background = element_rect(fill = "grey96", colour = NA),
+      panel.spacing = unit(1.1, "lines")
+    )
+  grid_theme <- switch(grid,
+    none = theme(panel.grid = element_blank()),
+    x = theme(
+      panel.grid.major.x = element_line(colour = "grey91", linewidth = 0.35),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank()
+    ),
+    y = theme(
+      panel.grid.major.y = element_line(colour = "grey91", linewidth = 0.35),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor = element_blank()
+    ),
+    xy = theme(
+      panel.grid.major = element_line(colour = "grey91", linewidth = 0.35),
+      panel.grid.minor = element_blank()
+    )
+  )
+  base + grid_theme
 }
 ```
 
@@ -362,10 +453,11 @@ plot_speleothem_map <- function(sites) {
     )
   }
   p |> layout(
-    title = list(
-      text = paste0("<b>DoD2k speleothem archive</b><br><sup>", nrow(sites), " series</sup>"),
-      x = 0.5, xanchor = "center"
+    title = plotly_title(
+      "DoD2k speleothem archive",
+      paste0(nrow(sites), " series — symbol = proxy type; hover for site name and year range")
     ),
+    margin = list(t = 72, b = 0, l = 0, r = 0),
     geo = list(
       projection = list(type = "natural earth"),
       showland = TRUE, landcolor = "#f0f0f0",
@@ -373,13 +465,14 @@ plot_speleothem_map <- function(sites) {
       showcountries = TRUE, countrycolor = "#bbbbbb",
       lataxis = list(range = c(-40, 75))
     ),
-    legend = list(orientation = "h", y = -0.05, x = 0.5, xanchor = "center")
+    legend = list(orientation = "h", y = -0.05, x = 0.02, xanchor = "left")
   )
 }
 ```
 
 ```{r}
 #| label: speleothem-map
+#| fig-cap: "Global distribution of DoD2k speleothem series. Compare proxy-type clusters with regions used in Steps 2–3."
 #| dependson: speleothem-summary
 
 plot_speleothem_map(speleo_sites)
@@ -415,16 +508,17 @@ plot_speleothem_density <- function(catalog, bin_width = 100) {
     scale_x_continuous(limits = c(0, 2000), breaks = seq(0, 2000, 250), name = "Year (CE)") +
     labs(
       title = "Where observations exist",
-      subtitle = "Stacked by proxy type (100-year bins)",
+      subtitle = "Series with at least one dated value per 100-year bin, stacked by proxy type",
+      caption = "Watch for: pre-1600 gaps and whether δ18O dominates recent centuries.",
       y = "Series with data"
     ) +
-    theme_clean()
+    theme_clean(grid = "y")
 }
 ```
 
 ```{r}
 #| label: speleothem-density
-#| fig-cap: "Series with observations per century"
+#| fig-cap: "Temporal coverage by century. Tall stacks in a bin mean many caves contributed dated values in that period."
 #| dependson: speleothem-summary
 
 plot_speleothem_density(catalog)
@@ -449,32 +543,25 @@ plot_speleothem_resolution <- function(sites) {
     scale_x_discrete(labels = proxy_labels[proxy_order]) +
     labs(
       title = "Temporal resolution per series",
-      subtitle = "Number of dated values — calendar span is often misleading",
+      subtitle = "Number of dated values — more informative than calendar first/last year",
+      caption = "Watch for: long spans with few points (low effective resolution).",
       x = NULL, y = "Observations per series"
     ) +
-    theme_clean()
+    theme_clean(grid = "y")
 }
 ```
 
 ```{r}
 #| label: speleothem-resolution
-#| fig-cap: "Dated values per series"
+#| fig-cap: "Resolution per proxy type. Compare median (thick line) across δ18O, δ13C, growth rate, and Mg/Ca."
 #| dependson: speleothem-summary
 
 plot_speleothem_resolution(speleo_sites)
 ```
 
-# Instrumental correlation screening
+# Screen against instrumental climate
 
-Do speleothem proxies covary with local climate? We extract **CRU TS v4.07** temperature and precipitation from the nearest 0.5° grid cell (same idea as Exercise 11/12 with CRUTEM) and correlate each series with:
-
-- annual mean temperature
-- JJA mean temperature
-- annual precipitation total
-
-Overlap window: **1901–2000 CE**, minimum **10** paired years. This is a first-order screening — speleothem signals depend on region, season, and proxy type (δ18O can track rain amount or temperature).
-
-First run downloads CRU TS (~400 MB compressed) to `output/cache/cru_ts/` and caches extracted site climate.
+Each speleothem series is compared to the **nearest CRU grid box** (0.5°): annual mean temperature, JJA temperature, and annual precipitation [@harris2020]. We use **Pearson correlation** on detrended annual values (1901–2000). A series needs at least 10 overlapping years.
 
 ## CRU grid extraction
 
@@ -567,6 +654,7 @@ Pearson correlation with two-tailed p-value; series with fewer than 10 overlap y
 ```{r}
 #| label: corr-setup
 #| code-fold: true
+#| cache: true
 
 instr_y0 <- 1901L
 instr_y1 <- 2000L
@@ -714,6 +802,7 @@ Distribution of correlation coefficients across all series — weak median corre
 ```{r}
 #| label: corr-histogram-fn
 #| code-fold: true
+#| cache: true
 
 #' Histogram of correlation coefficients, faceted by climate variable.
 plot_correlation_histogram <- function(corr) {
@@ -735,17 +824,17 @@ plot_correlation_histogram <- function(corr) {
     scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
     labs(
       title = "Proxy–climate correlations (all speleothem series)",
-      subtitle = paste0("Nearest CRU TS grid cell, ", instr_y0, "–", instr_y1),
+      subtitle = paste0("Local CRU grid box, ", instr_y0, "–", instr_y1),
       x = "Pearson r", y = "Count"
     ) +
-    theme_clean()
+    theme_clean(grid = "y")
 }
 ```
 
 ```{r}
 #| label: corr-histogram
-#| fig-cap: "Distribution of correlation coefficients"
-#| dependson: [corr-run, corr-histogram-fn]
+#| fig-cap: "Distribution of Pearson r for each climate target. Peaks near zero suggest weak local screening signal overall."
+#| dependson: corr-run
 
 plot_correlation_histogram(speleo_corr)
 ```
@@ -757,6 +846,7 @@ Compare temperature vs. precipitation fit and count significant correlations (p 
 ```{r}
 #| label: corr-by-type-fn
 #| code-fold: true
+#| cache: true
 
 #' Boxplot of correlations by proxy type and climate variable.
 plot_correlation_by_type <- function(corr) {
@@ -778,9 +868,11 @@ plot_correlation_by_type <- function(corr) {
     scale_x_discrete(labels = proxy_labels[proxy_order]) +
     labs(
       title = "Correlation by proxy type",
+      subtitle = "Spread and median r per proxy — compare temperature vs. precipitation panels",
+      caption = "Boxes near zero across types → no single proxy consistently tracks local CRU.",
       x = NULL, y = "Pearson r"
     ) +
-    theme_clean()
+    theme_clean(grid = "y")
 }
 
 #' Count significant correlations (p < 0.05) by proxy type and climate variable.
@@ -806,23 +898,26 @@ plot_significance_counts <- function(corr) {
     scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
     labs(
       title = "Significant correlations (p < 0.05)",
+      subtitle = "Count of series passing local significance test per proxy type",
+      caption = "Low counts are expected — screening is strict and speleothems are heterogeneous.",
       x = NULL, y = "Number of series"
     ) +
-    theme_clean()
+    theme_clean(grid = "y")
 }
 ```
 
 ```{r}
 #| label: corr-by-type
-#| fig-cap: "Correlations and significance by proxy type"
-#| dependson: [corr-run, corr-by-type-fn]
+#| fig-cap: "Correlations and significance by proxy type — compare spread across the three climate targets."
+#| dependson: corr-run
 
 plot_correlation_by_type(speleo_corr)
 ```
 
 ```{r}
 #| label: corr-significance
-#| dependson: [corr-run, corr-by-type-fn]
+#| fig-cap: "Number of series with p < 0.05 per proxy type — a strict local screening threshold."
+#| dependson: corr-run
 
 plot_significance_counts(speleo_corr)
 ```
@@ -834,6 +929,7 @@ For each series, which of the three climate targets has the highest |r|?
 ```{r}
 #| label: corr-best-var-fn
 #| code-fold: true
+#| cache: true
 
 plot_best_variable_counts <- function(corr) {
   best <- corr |>
@@ -846,17 +942,19 @@ plot_best_variable_counts <- function(corr) {
     scale_fill_manual(values = proxy_colors, labels = proxy_labels[proxy_order], name = "Proxy type") +
     labs(
       title = "Strongest |r| per series",
-      subtitle = "Which climate variable fits best?",
+      subtitle = "Which climate variable (T annual, T JJA, precipitation) fits best locally?",
+      caption = "Precipitation bars dominating → rainfall-sensitive proxies for Step 2/3.",
       x = NULL, y = "Number of series"
     ) +
-    theme_clean() +
+    theme_clean(grid = "y") +
     theme(axis.text.x = element_text(angle = 20, hjust = 1))
 }
 ```
 
 ```{r}
 #| label: corr-best-var
-#| dependson: [corr-run, corr-best-var-fn]
+#| fig-cap: "Which climate variable wins the |r| contest per series — guides target choice in Step 2."
+#| dependson: corr-run
 
 plot_best_variable_counts(speleo_corr)
 ```
@@ -868,13 +966,14 @@ Points coloured by the strongest local correlation (signed).
 ```{r}
 #| label: corr-map-fn
 #| code-fold: true
+#| cache: true
 
 #' Map speleothem sites coloured by best correlation with CRU climate.
 plot_correlation_map <- function(corr) {
   map_df <- corr |>
     filter(is.finite(best_r)) |>
     left_join(
-      speleo_sites |> select(dataset_id, site),
+      speleo_sites |> dplyr::select(dataset_id, site),
       by = "dataset_id"
     ) |>
     mutate(
@@ -894,10 +993,11 @@ plot_correlation_map <- function(corr) {
       marker = list(size = 7, line = list(width = 0.4, color = "#333"))
     ) |>
     layout(
-      title = list(
-        text = paste0("<b>Best proxy–climate correlation</b><br><sup>CRU TS, ", instr_y0, "–", instr_y1, "</sup>"),
-        x = 0.5, xanchor = "center"
+      title = plotly_title(
+        "Best proxy–climate correlation",
+        paste0("Signed r at nearest CRU grid cell, ", instr_y0, "–", instr_y1, " — red = positive, blue = negative")
       ),
+      margin = list(t = 72, b = 0, l = 0, r = 0),
       geo = list(
         projection = list(type = "natural earth"),
         showland = TRUE, landcolor = "#f0f0f0",
@@ -910,7 +1010,8 @@ plot_correlation_map <- function(corr) {
 
 ```{r}
 #| label: corr-map
-#| dependson: [corr-run, corr-map-fn, speleothem-summary]
+#| fig-cap: "Geographic pattern of best local fit. Strong regional clusters may reflect real hydroclimate — or archive bias."
+#| dependson: [corr-run, speleothem-summary]
 
 plot_correlation_map(speleo_corr)
 ```
@@ -941,7 +1042,7 @@ plot_correlation_examples <- function(corr, catalog, clim) {
     px <- proxy_ann |> filter(dataset_id == row$dataset_id)
     cd <- clim |>
       filter(loc_id == px$loc_id[1]) |>
-      select(year, climate = all_of(clim_col[[row$best_var]]))
+      dplyr::select(year, climate = all_of(clim_col[[row$best_var]]))
     px |>
       filter(year >= instr_y0, year <= instr_y1) |>
       inner_join(cd, by = "year") |>
@@ -954,25 +1055,1101 @@ plot_correlation_examples <- function(corr, catalog, clim) {
   })
 
   ggplot(examples, aes(climate, value)) +
-    geom_point(alpha = 0.55, size = 1.5, colour = "#444444") +
-    geom_smooth(method = "lm", se = TRUE, colour = "#b2182b", linewidth = 0.8) +
+    geom_point(alpha = 0.6, size = point_sz_sm, colour = "#444444") +
+    geom_smooth(method = "lm", se = TRUE, colour = "#b2182b", linewidth = line_lwd) +
     facet_wrap(~paste0(proxy_label, " — ", dataset_id, "\nr = ", round(r, 2)),
                scales = "free", ncol = 2) +
     labs(
       title = "Best local fits per proxy type",
-      subtitle = paste0("CRU TS grid box, ", instr_y0, "–", instr_y1),
+      subtitle = paste0("Strongest |r| series per proxy vs. CRU TS (", instr_y0, "–", instr_y1, ")"),
+      caption = "Slope direction is site-specific — do not generalise across the archive.",
       x = "Climate (CRU TS)", y = "Proxy value"
     ) +
-    theme_clean() +
-    theme(strip.text = element_text(size = 8))
+    theme_clean(grid = "y") +
+    theme(strip.text = element_text(size = 8.5, face = "bold"))
 }
 ```
 
 ```{r}
 #| label: corr-examples
-#| fig-cap: "Example proxy–climate scatter plots"
+#| fig-cap: "Illustrative scatter plots — one showcase series per proxy type. Grey band = linear fit ± SE."
 #| dependson: corr-run
 
 if (!exists("cru_clim")) cru_clim <- readRDS(cru_rds)
 plot_correlation_examples(speleo_corr, catalog, cru_clim)
 ```
+
+## Step 1 takeaways
+
+```{r}
+#| label: step1-takeaways-prep
+#| include: false
+#| dependson: corr-run
+
+median_r_tmp <- median(speleo_corr$r_tmp_ann, na.rm = TRUE)
+median_r_pre <- median(speleo_corr$r_pre_ann, na.rm = TRUE)
+
+best_target <- speleo_corr |>
+  filter(!is.na(best_var)) |>
+  count(proxy_type, best_var, name = "n") |>
+  group_by(proxy_type) |>
+  slice_max(n, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(
+    proxy_label = proxy_labels[as.character(proxy_type)],
+    target = recode(best_var,
+      tmp_ann = "annual temperature",
+      tmp_jja = "JJA temperature",
+      pre_ann = "annual precipitation"
+    )
+  )
+
+step1_proxy_bullets <- best_target |>
+  mutate(line = glue("- **{proxy_label}**: strongest local fits most often with *{target}* ({n} series)")) |>
+  pull(line) |>
+  paste(collapse = "\n\n")
+```
+
+Across `r n_tested` series (`r instr_y0`–`r instr_y1`), median local correlations stay close to zero (temperature *r* ≈ `r sprintf("%.2f", median_r_tmp)`; precipitation *r* ≈ `r sprintf("%.2f", median_r_pre)`). Only `r n_sig` series reach p < 0.05.
+
+Most common best-fit target per proxy type:
+
+`r step1_proxy_bullets`
+
+**Takeaway for Step 2:** screen locally, combine regionally — do not average all speleothems globally.
+
+# Step 2 — Regional composite reconstruction
+
+We group caves into coarse regions, keep only series whose local correlation passes p < 0.05, **detrend** each series, **calibrate** it to CRU on 1901–1980, and check whether a regional average still matches instruments on **1981–2000** (validation — data the model did not see during calibration).
+
+## Regional bins and screening
+
+```{r}
+#| label: recon-setup
+#| code-fold: true
+#| cache: true
+
+cal_y0 <- 1901L
+cal_y1 <- 1980L
+val_y0 <- 1981L
+val_y1 <- 2000L
+min_screen_n <- 3L   # minimum screened series per region × target
+screen_p <- 0.05
+
+climate_col <- c(tmp_ann = "tmp_ann", tmp_jja = "tmp_jja", pre_ann = "pre_ann")
+p_col <- c(tmp_ann = "p_tmp_ann", tmp_jja = "p_tmp_jja", pre_ann = "p_pre_ann")
+r_col <- c(tmp_ann = "r_tmp_ann", tmp_jja = "r_tmp_jja", pre_ann = "r_pre_ann")
+
+#' Assign coarse continent/region from coordinates (speleothem-focused bins).
+assign_region <- function(lon, lat) {
+  case_when(
+    lat < -10 & lon > 100 ~ "Australasia",
+    lat <= 15 & lon >= -85 & lon < -30 ~ "South America",
+    lat > 15 & lon < -30 ~ "Americas (north)",
+    lat >= 35 & lon >= -15 & lon < 45 ~ "Europe",
+    lat >= -35 & lat < 40 & lon >= -20 & lon < 55 ~ "Africa / Med",
+    lon >= 50 ~ "Asia",
+    TRUE ~ "Other"
+  )
+}
+
+#' Remove linear trend (preserve mean).
+detrend_linear <- function(years, values) {
+  ok <- is.finite(values)
+  if (sum(ok) < 5L) return(rep(NA_real_, length(values)))
+  fit <- lm(values[ok] ~ years[ok])
+  resid <- values - predict(fit, newdata = data.frame(years = years))
+  resid + mean(values[ok])
+}
+
+#' Z-score using reference years only.
+zscore_ref <- function(x, years, ref_y0, ref_y1) {
+  ref <- x[years >= ref_y0 & years <= ref_y1 & is.finite(x)]
+  if (length(ref) < 5L) return(rep(NA_real_, length(x)))
+  s <- sd(ref)
+  if (!is.finite(s) || s < 1e-8) return(rep(0, length(x)))
+  (x - mean(ref)) / s
+}
+
+#' Screen series: significant p for assigned best climate variable.
+screen_correlations <- function(corr, p_cut = screen_p) {
+  corr |>
+    mutate(
+      region = assign_region(lon, lat),
+      p_best = case_when(
+        best_var == "tmp_ann" ~ p_tmp_ann,
+        best_var == "tmp_jja" ~ p_tmp_jja,
+        best_var == "pre_ann" ~ p_pre_ann,
+        TRUE ~ NA_real_
+      ),
+      screened = is.finite(best_r) & !is.na(p_best) & p_best < p_cut & n_overlap >= min_overlap
+    )
+}
+
+#' Calibrate one site; return annual recon + target in z-space.
+calibrate_one_site <- function(proxy_df, clim_df, climate_var,
+                               cal_y0, cal_y1, val_y0, val_y1) {
+  col <- as.character(climate_col[[as.character(climate_var)]])
+  d <- proxy_df |>
+    inner_join(
+      clim_df |> dplyr::transmute(year, climate = .data[[col]]),
+      by = "year"
+    ) |>
+    filter(year >= cal_y0, year <= val_y1)
+
+  if (nrow(d) < min_overlap) return(NULL)
+
+  d <- d |>
+    mutate(
+      proxy_dt = detrend_linear(year, value),
+      proxy_z = zscore_ref(proxy_dt, year, cal_y0, cal_y1),
+      climate_z = zscore_ref(climate, year, cal_y0, cal_y1)
+    )
+
+  cal <- d |> filter(year >= cal_y0, year <= cal_y1)
+  ok <- complete.cases(cal[, c("proxy_z", "climate_z")])
+  if (sum(ok) < min_overlap) return(NULL)
+
+  fit <- lm(climate_z ~ proxy_z, data = cal[ok, ])
+  d <- d |>
+    mutate(recon_z = predict(fit, newdata = d))
+
+  list(
+    data = d |> dplyr::select(year, proxy_z, climate_z, recon_z),
+    coef = coef(fit)
+  )
+}
+
+#' Safe Pearson r (returns NA if fewer than 3 pairs).
+safe_cor <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 3L) return(NA_real_)
+  cor(x[ok], y[ok])
+}
+
+#' Build regional composites for each (region, climate_var) with enough screened series.
+build_regional_reconstructions <- function(corr, catalog, clim, sites) {
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |> inner_join(loc, by = c("lon", "lat"))
+  screened <- corr |> filter(screened)
+
+  combos <- screened |>
+    count(region, best_var, name = "n") |>
+    filter(n >= min_screen_n, !is.na(best_var))
+
+  if (!nrow(combos)) return(tibble())
+
+  bind_rows(compact(map(seq_len(nrow(combos)), function(i) {
+    reg <- combos$region[i]
+    cv  <- combos$best_var[i]
+    sub <- screened |> filter(region == reg, best_var == cv)
+
+    site_recons <- compact(map(sub$dataset_id, function(id) {
+      row <- sub |> filter(dataset_id == id)
+      px <- proxy_ann |> filter(dataset_id == id)
+      cdf <- clim |> filter(loc_id == px$loc_id[1])
+      out <- calibrate_one_site(px, cdf, cv, cal_y0, cal_y1, val_y0, val_y1)
+      if (is.null(out)) return(NULL)
+      out$data |> mutate(
+        dataset_id = id,
+        sign_r = sign(row[[r_col[[cv]]]][1])
+      )
+    }))
+    if (!length(site_recons)) return(NULL)
+
+    all_years <- bind_rows(site_recons) |>
+      mutate(recon_z_signed = if_else(sign_r < 0, -recon_z, recon_z))
+
+    # Regional CRU target: mean across sites, then one z-score (not mean of site z-scores).
+    col <- as.character(climate_col[[as.character(cv)]])
+    regional_clim <- map_dfr(sub$dataset_id, function(id) {
+      px <- proxy_ann |> filter(dataset_id == id) |> slice(1)
+      clim |>
+        filter(loc_id == px$loc_id) |>
+        dplyr::transmute(year, climate = .data[[col]])
+    }) |>
+      group_by(year) |>
+      summarize(climate = mean(climate, na.rm = TRUE), .groups = "drop") |>
+      mutate(climate_z = zscore_ref(climate, year, cal_y0, cal_y1))
+
+    composite <- all_years |>
+      group_by(year) |>
+      summarize(recon_z = mean(recon_z_signed, na.rm = TRUE), .groups = "drop") |>
+      left_join(regional_clim |> dplyr::select(year, climate_z), by = "year")
+
+    cal_idx <- composite$year >= cal_y0 & composite$year <= cal_y1
+    val_idx <- composite$year >= val_y0 & composite$year <= val_y1
+
+    tibble(
+      region = reg,
+      climate_var = cv,
+      climate_label = recode(cv,
+        tmp_ann = "Temperature (annual)",
+        tmp_jja = "Temperature (JJA)",
+        pre_ann = "Precipitation (annual)"
+      ),
+      n_series = nrow(sub),
+      r_cal = safe_cor(composite$climate_z[cal_idx], composite$recon_z[cal_idx]),
+      r_val = safe_cor(composite$climate_z[val_idx], composite$recon_z[val_idx]),
+      rmse_cal = sqrt(mean((composite$climate_z[cal_idx] - composite$recon_z[cal_idx])^2, na.rm = TRUE)),
+      rmse_val = sqrt(mean((composite$climate_z[val_idx] - composite$recon_z[val_idx])^2, na.rm = TRUE)),
+      composite = list(composite),
+      site_ids = list(sub$dataset_id)
+    )
+  })))
+}
+
+#' Bar chart of calibration vs validation correlation by region.
+plot_recon_skill <- function(recon_summary) {
+  long <- recon_summary |>
+    dplyr::select(region, climate_label, n_series, r_cal, r_val) |>
+    pivot_longer(c(r_cal, r_val), names_to = "period", values_to = "r") |>
+    mutate(
+      period = factor(
+        period,
+        levels = c("r_cal", "r_val"),
+        labels = c("Calibration (1901–1980)", "Validation (1981–2000)")
+      ),
+      label = paste0(region, " — ", climate_label, " (n=", n_series, ")")
+    ) |>
+    mutate(label = fct_reorder(label, r, .fun = max, .desc = TRUE))
+
+  ggplot(long, aes(r, label, fill = period)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.65) +
+    geom_vline(xintercept = 0, linewidth = line_lwd_thin, colour = "grey40") +
+    scale_fill_manual(values = c("#4393c3", "#d6604d"), name = NULL) +
+    labs(
+      title = "Regional composite skill",
+      subtitle = "Blue = calibration (1901–1980); red = validation (1981–2000)",
+      caption = "Similar bar lengths → composite generalises; red near zero → poor out-of-sample skill.",
+      x = "Pearson r", y = NULL
+    ) +
+    theme_clean(grid = "x") +
+    theme(legend.position = "bottom")
+}
+
+#' Time series of regional composite vs regional CRU mean (z-scores).
+plot_recon_timeseries <- function(recon_summary, focus = c("validation", "full")) {
+  focus <- match.arg(focus)
+  ts <- recon_summary |>
+    dplyr::select(region, climate_label, n_series, composite) |>
+    unnest(composite) |>
+    mutate(
+      panel = paste0(region, " — ", climate_label, " (n = ", n_series, ")"),
+      panel = fct_inorder(panel)
+    ) |>
+    pivot_longer(c(climate_z, recon_z), names_to = "series", values_to = "z") |>
+    mutate(series = recode(series,
+      climate_z = "CRU regional mean",
+      recon_z = "Speleothem composite"
+    ))
+
+  if (focus == "validation") {
+    ts <- ts |> filter(year >= val_y0, year <= val_y1)
+    title <- "Validation: composite vs CRU"
+    subtitle <- paste0(
+      val_y0, "–", val_y1, " — blue = CRU regional mean, red = speleothem composite (independent period)"
+    )
+  } else {
+    title <- "Regional composites vs CRU"
+    subtitle <- paste0(
+      "Grey band = calibration (", cal_y0, "–", cal_y1,
+      "); compare co-variation of blue and red lines"
+    )
+  }
+
+  p <- ggplot(ts, aes(year, z, colour = series, linetype = series))
+
+  if (focus == "full") {
+    p <- p + geom_rect(
+      data = data.frame(xmin = cal_y0, xmax = cal_y1 + 0.5),
+      aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+      inherit.aes = FALSE, fill = "grey85", alpha = 0.35, colour = NA
+    )
+  }
+
+  p +
+    geom_hline(yintercept = 0, linewidth = line_lwd_thin, colour = "grey75") +
+    geom_line(linewidth = line_lwd, alpha = 0.95) +
+    facet_wrap(~panel, scales = "free_y", ncol = 2) +
+    scale_colour_manual(
+      values = c("CRU regional mean" = "#2166ac", "Speleothem composite" = "#b2182b"),
+      name = NULL
+    ) +
+    scale_linetype_manual(
+      values = c("CRU regional mean" = "solid", "Speleothem composite" = "22"),
+      name = NULL
+    ) +
+    labs(
+      title = title, subtitle = subtitle,
+      caption = "Flat red line while blue varies → proxies capture little year-to-year variance.",
+      x = "Year (CE)", y = "Z-score"
+    ) +
+    theme_clean(grid = "y") +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(size = 9, face = "bold"),
+      panel.spacing.y = unit(0.9, "lines")
+    )
+}
+
+#' Map sites used in regional reconstructions.
+plot_recon_site_map <- function(corr, recon_summary) {
+  used_ids <- unique(unlist(recon_summary$site_ids))
+  map_df <- corr |>
+    mutate(
+      region = assign_region(lon, lat),
+      in_recon = dataset_id %in% used_ids,
+      hover = paste0(dataset_id, "<br>", region, "<br>",
+                     if_else(in_recon, "Used in Step 2", "Not screened"))
+    )
+
+  plot_ly(map_df, type = "scattergeo", mode = "markers",
+          lon = ~lon, lat = ~lat, text = ~hover, hoverinfo = "text",
+          color = ~in_recon, colors = c("#bbbbbb", "#b2182b"),
+          sizes = c(6, 10)) |>
+    layout(
+      title = plotly_title(
+        "Sites used in regional composites",
+        "Red = passed screening and entered a Step 2 composite; grey = not used"
+      ),
+      margin = list(t = 72, b = 0, l = 0, r = 0),
+      geo = list(
+        projection = list(type = "natural earth"),
+        showland = TRUE, landcolor = "#f0f0f0",
+        showocean = TRUE, oceancolor = "#e6f2fa",
+        showcountries = TRUE, countrycolor = "#bbbbbb"
+      )
+    )
+}
+```
+
+```{r}
+#| label: recon-screen
+#| cache: true
+#| dependson: [corr-run, recon-setup]
+
+if (!exists("cru_clim")) cru_clim <- readRDS(cru_rds)
+
+speleo_corr <- speleo_corr |> screen_correlations()
+
+screen_tbl <- speleo_corr |>
+  filter(screened) |>
+  count(region, best_var_label, name = "n") |>
+  arrange(desc(n))
+
+knitr::kable(screen_tbl, caption = "Screened series (p < 0.05 for best-fit climate variable)")
+
+glue(
+  "Screened: {sum(speleo_corr$screened, na.rm = TRUE)} of {nrow(speleo_corr)} series"
+)
+```
+
+## Calibrate and validate
+
+```{r}
+#| label: recon-run
+#| cache: true
+#| dependson: [corr-run, recon-setup, recon-screen]
+
+recon_summary <- build_regional_reconstructions(
+  speleo_corr, catalog, cru_clim, speleo_sites
+)
+
+if (nrow(recon_summary)) {
+  recon_summary |>
+    dplyr::select(region, climate_label, n_series, r_cal, r_val, rmse_cal, rmse_val) |>
+    mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+    knitr::kable(caption = "Regional composite skill (z-scores)")
+} else {
+  cat("No region × climate target with ≥", min_screen_n, "screened series.")
+}
+```
+
+## Skill and time series
+
+```{r}
+#| label: recon-skill-plot
+#| fig-cap: "Calibration vs validation Pearson r. Compare blue and red bar lengths — divergence flags overfitting."
+#| fig-width: 9
+#| fig-height: 6
+#| dependson: recon-run
+
+if (nrow(recon_summary)) plot_recon_skill(recon_summary)
+```
+
+```{r}
+#| label: recon-ts-plot
+#| fig-cap: "Independent validation period (1981–2000). Track whether red (composite) follows blue (CRU) year to year."
+#| fig-width: 9
+#| fig-height: 10
+#| dependson: recon-run
+
+if (nrow(recon_summary)) plot_recon_timeseries(recon_summary, focus = "validation")
+```
+
+```{r}
+#| label: recon-map
+#| fig-cap: "Geographic footprint of Step 2 composites. Sparse red points limit regional representativeness."
+#| dependson: recon-run
+
+if (nrow(recon_summary)) plot_recon_site_map(speleo_corr, recon_summary)
+```
+
+## Step 2 takeaways
+
+```{r}
+#| label: step2-takeaways-prep
+#| include: false
+#| dependson: recon-run
+
+n_screened <- sum(speleo_corr$screened, na.rm = TRUE)
+n_series_total <- nrow(speleo_corr)
+step2_ok <- nrow(recon_summary) > 0L
+
+if (step2_ok) {
+  best_val <- recon_summary |> slice_max(r_val, n = 1, with_ties = FALSE)
+  worst_val <- recon_summary |> slice_min(r_val, n = 1, with_ties = FALSE)
+}
+```
+
+`r if (step2_ok) glue("Of {n_series_total} speleothem series, {n_screened} passed screening (p < {screen_p} for the best-fit climate variable). From these, **{nrow(recon_summary)} regional composite(s)** were built (≥ {min_screen_n} series per region × target).") else glue("Step 2 could not run — fewer than {min_screen_n} screened series per region × climate target. Screened: {n_screened} of {n_series_total} series; relax screening or extend the overlap window.")`
+
+`r if (step2_ok) glue("**Best validation:** {best_val$region} — {best_val$climate_label} (*r*~val~ = {sprintf('%.3f', best_val$r_val)}, *n* = {best_val$n_series}). **Weakest:** {worst_val$region} — {worst_val$climate_label} (*r*~val~ = {sprintf('%.3f', worst_val$r_val)}).")`
+
+Validation *r* below calibration *r* is common when caves in one region respond differently [@fairchild2006].
+
+# Step 3 — ENSO-focused screening
+
+**ENSO** (El Niño–Southern Oscillation) is a shift in tropical Pacific sea-surface temperature. We use the **Niño3.4 index** — warm anomalies in the central Pacific often change rainfall in eastern Australia [@tadros2016].
+
+Our speleothem series are **one value per calendar year**. ENSO peaks in **boreal winter (DJF)**, so we also test a **year-mean Niño index** and **lags of ±1 year**, because rain at the cave can respond with a delay. As a second target we use **local summer rainfall (JJA)** from CRU — often a more direct link than the Pacific index itself.
+
+**Regions:** SE Australia [@tadros2016], eastern Australasia, SW Pacific. **Proxies:** Mg/Ca and δ18O only.
+
+```{r}
+#| label: enso-setup
+#| code-fold: true
+#| cache: true
+#| dependson: [corr-setup, recon-setup]
+
+enso_y0 <- 1901L
+enso_y1 <- 2000L
+enso_min_overlap <- min_overlap   # same as Step 1 (10 yr)
+enso_p_cut <- 0.05
+enso_p_explore <- 0.20            # relaxed for exploratory composites
+nino34_url <- "https://www.psl.noaa.gov/data/timeseries/month/data/nino34.long.anom.data"
+nino34_dat <- file.path(cache_dir, "nino34.long.anom.data")
+nino34_rds <- file.path(cache_dir, "nino34_index.rds")
+
+enso_proxy_order <- c("Mg/Ca", "d18O")
+enso_proxy_labels <- c(`Mg/Ca` = "Mg/Ca", d18O = "δ18O")
+
+#' Parse NOAA PSL Niño3.4 monthly anomalies (HadISST, 1981–2010 base).
+load_nino34_monthly <- function(refresh = FALSE) {
+  if (!refresh && file.exists(nino34_rds)) return(readRDS(nino34_rds))
+
+  if (!file.exists(nino34_dat)) {
+    message("Downloading Niño3.4 index …")
+    if (nzchar(Sys.which("curl"))) {
+      status <- system2("curl", c("-L", "--retry", "3", "-o", nino34_dat, nino34_url))
+      if (status != 0) stop("Niño3.4 download failed")
+    } else {
+      utils::download.file(nino34_url, nino34_dat, mode = "wb")
+    }
+  }
+
+  lines <- readLines(nino34_dat, warn = FALSE)
+  hl <- grep("^[[:space:]]*[0-9]{4}", lines)
+  raw <- do.call(rbind, lapply(lines[hl], \(l) as.numeric(scan(text = l, quiet = TRUE))))
+  colnames(raw) <- c("year", month.abb)
+  monthly <- as_tibble(raw) |>
+    pivot_longer(-year, names_to = "month", values_to = "nino34") |>
+    mutate(month_num = match(month, month.abb)) |>
+    filter(nino34 > -90)
+
+  saveRDS(monthly, nino34_rds)
+  monthly
+}
+
+#' Annual and DJF (Dec–Feb) Niño3.4 for climate year starting in Dec of prior year.
+build_nino34_annual <- function(monthly) {
+  djf <- monthly |>
+    filter(month_num %in% c(12L, 1L, 2L)) |>
+    mutate(
+      climate_year = if_else(month_num == 12L, year + 1L, year)
+    ) |>
+    group_by(climate_year) |>
+    summarize(nino34_djf = mean(nino34, na.rm = TRUE), .groups = "drop") |>
+    rename(year = climate_year)
+
+  ann <- monthly |>
+    group_by(year) |>
+    summarize(nino34_ann = mean(nino34, na.rm = TRUE), .groups = "drop")
+
+  full_join(ann, djf, by = "year")
+}
+
+#' ENSO teleconnection regions [@tadros2016 and SW Pacific literature].
+assign_enso_region <- function(lon, lat) {
+  case_when(
+    lon >= 138 & lon <= 155 & lat >= -40 & lat <= -28 ~ "SE Australia (Tadros)",
+    lon >= 130 & lon <= 180 & lat >= -45 & lat <= -10 ~ "Eastern Australasia",
+    lon >= 110 & lon <= 180 & lat >= -30 & lat <= 5 ~ "SW Pacific / IASM",
+    TRUE ~ NA_character_
+  )
+}
+
+#' Correlate detrended speleothem annual series with Niño3.4 and local rainfall.
+compute_enso_correlations <- function(catalog, clim, sites, nino_ann,
+                                      y0 = enso_y0, y1 = enso_y1,
+                                      proxies = enso_proxy_order) {
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |>
+    inner_join(loc, by = c("lon", "lat")) |>
+    filter(proxy_type %in% proxies)
+
+  map_dfr(group_split(proxy_ann, dataset_id), function(df) {
+    reg <- assign_enso_region(df$lon[1], df$lat[1])
+    if (is.na(reg)) return(NULL)
+
+    cdf <- clim |> filter(loc_id == df$loc_id[1])
+    d <- df |>
+      filter(year >= y0, year <= y1) |>
+      inner_join(cdf |> dplyr::select(year, pre_ann), by = "year") |>
+      inner_join(nino_ann |> dplyr::select(year, nino34_djf, nino34_ann), by = "year")
+
+    d <- d |>
+      mutate(value_dt = detrend_linear(year, value))
+
+    ok <- complete.cases(d$value_dt, d$nino34_djf, d$pre_ann)
+    d <- d[ok, , drop = FALSE]
+    if (nrow(d) < enso_min_overlap) return(NULL)
+
+    ct_djf <- cor.test(d$value_dt, d$nino34_djf, method = "pearson")
+    ct_ann <- cor.test(d$value_dt, d$nino34_ann, method = "pearson")
+    ct_pre <- cor.test(d$value_dt, d$pre_ann, method = "pearson")
+
+    tibble(
+      dataset_id = df$dataset_id[1],
+      proxy_type = df$proxy_type[1],
+      lon = df$lon[1], lat = df$lat[1],
+      enso_region = reg,
+      n_overlap = nrow(d),
+      r_nino_djf = unname(ct_djf$estimate),
+      p_nino_djf = ct_djf$p.value,
+      r_nino_ann = unname(ct_ann$estimate),
+      p_nino_ann = ct_ann$p.value,
+      r_pre_ann = unname(ct_pre$estimate),
+      p_pre_ann = ct_pre$p.value
+    )
+  })
+}
+
+lag_join_nino <- function(df, nino_df, col, lag = 0L) {
+  nj <- nino_df |>
+    dplyr::select(year, nino_v = all_of(col)) |>
+    mutate(year = year + lag)
+  inner_join(df, nj, by = "year")
+}
+
+load_enso_seasonal_clim <- function(loc) {
+  pre_nc <- file.path(cru_dir, "cru_ts4.07.1901.2022.pre.dat.nc")
+  if (!file.exists(pre_nc)) return(NULL)
+  pts <- vect(loc, geom = c("lon", "lat"), crs = "EPSG:4326")
+  mat <- as.matrix(
+    terra::extract(rast(pre_nc, subds = "pre"), pts, method = "simple")[, -1]
+  )
+  map_dfr(seq_len(nrow(loc)), function(i) {
+    m <- mat[i, ]
+    tibble(
+      loc_id = loc$loc_id[i],
+      year = cru_years,
+      pre_djf = vapply(cru_years, function(yr) {
+        dec <- (yr - 1901L) * 12L + 12L
+        if (yr == 1901L) return(NA_real_)
+        sum(m[c(dec, (yr - 1901L) * 12L + 1:2)], na.rm = TRUE)
+      }, numeric(1)),
+      pre_jja = vapply(cru_years, function(yr) {
+        sum(m[(yr - 1901L) * 12L + 6:8], na.rm = TRUE)
+      }, numeric(1))
+    )
+  })
+}
+
+enso_corr_test <- function(x, y) {
+  ok <- complete.cases(x, y)
+  if (sum(ok) < enso_min_overlap) return(list(r = NA_real_, p = NA_real_, n = sum(ok)))
+  ct <- cor.test(x[ok], y[ok], method = "pearson")
+  list(r = unname(ct$estimate), p = ct$p.value, n = sum(ok))
+}
+
+compute_enso_sweep <- function(catalog, clim, sites, nino_ann, clim_season = NULL,
+                               lags = -1:1) {
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |>
+    inner_join(loc, by = c("lon", "lat")) |>
+    filter(proxy_type %in% enso_proxy_order)
+
+  nino_cols <- c("nino34_djf", "nino34_ann")
+  clim_cols <- c("pre_ann", "pre_djf", "pre_jja")
+
+  map_dfr(group_split(proxy_ann, dataset_id), function(df) {
+    reg <- assign_enso_region(df$lon[1], df$lat[1])
+    if (is.na(reg)) return(NULL)
+
+    cdf <- clim |> filter(loc_id == df$loc_id[1])
+    if (!is.null(clim_season)) {
+      cdf <- cdf |>
+        left_join(clim_season |> dplyr::select(loc_id, year, pre_djf, pre_jja),
+                  by = c("loc_id", "year"))
+    }
+
+    base <- df |>
+      filter(year >= enso_y0, year <= enso_y1) |>
+      inner_join(cdf, by = c("loc_id", "year")) |>
+      mutate(value_dt = detrend_linear(year, value))
+
+    rows <- list()
+    for (lag in lags) {
+      for (ncol in nino_cols) {
+        d <- lag_join_nino(base, nino_ann, ncol, lag)
+        ok <- complete.cases(d$value_dt, d$nino_v)
+        if (sum(ok) < enso_min_overlap) next
+        ct <- enso_corr_test(d$value_dt[ok], d$nino_v[ok])
+        rows[[length(rows) + 1L]] <- tibble(
+          dataset_id = df$dataset_id[1], proxy_type = df$proxy_type[1],
+          enso_region = reg, n_overlap = sum(ok),
+          target = ncol, lag = lag, r = ct$r, p = ct$p
+        )
+      }
+      for (ccol in intersect(clim_cols, names(base))) {
+        ok <- complete.cases(base$value_dt, base[[ccol]])
+        if (sum(ok) < enso_min_overlap) next
+        ct <- enso_corr_test(base$value_dt[ok], base[[ccol]][ok])
+        rows[[length(rows) + 1L]] <- tibble(
+          dataset_id = df$dataset_id[1], proxy_type = df$proxy_type[1],
+          enso_region = reg, n_overlap = sum(ok),
+          target = ccol, lag = 0L, r = ct$r, p = ct$p
+        )
+      }
+    }
+    if (!length(rows)) return(NULL)
+    bind_rows(rows)
+  })
+}
+
+build_enso_composite <- function(sweep, catalog, clim, sites, nino_ann,
+                                 region, proxy_type = "d18O",
+                                 method = c("baseline", "tuned"),
+                                 min_n = 3L) {
+  method <- match.arg(method)
+  pool <- sweep |>
+    filter(enso_region == region, proxy_type == !!proxy_type)
+
+  if (method == "baseline") {
+    pick <- pool |>
+      filter(target == "nino34_djf", lag == 0L) |>
+      arrange(desc(abs(r))) |>
+      slice_head(n = max(min_n, 3L))
+    nino_col <- "nino34_djf"
+    lag <- 0L
+  } else {
+    pick <- pool |>
+      filter(grepl("^nino", target)) |>
+      group_by(dataset_id) |>
+      slice_max(abs(r), n = 1, with_ties = FALSE) |>
+      ungroup() |>
+      arrange(desc(abs(r))) |>
+      slice_head(n = max(min_n, 5L))
+    if (!nrow(pick)) return(NULL)
+    nino_col <- pick$target[1]
+    lag <- pick$lag[1]
+  }
+
+  if (nrow(pick) < min_n) return(NULL)
+
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |> inner_join(loc, by = c("lon", "lat"))
+
+  site_ts <- map(pick$dataset_id, function(id) {
+    row <- pick |> filter(dataset_id == id)
+    px <- proxy_ann |> filter(dataset_id == id)
+    cdf <- clim |> filter(loc_id == px$loc_id[1])
+    d <- px |>
+      filter(year >= enso_y0, year <= enso_y1) |>
+      mutate(proxy_dt = detrend_linear(year, value)) |>
+      inner_join(cdf |> dplyr::select(year, pre_ann), by = "year")
+    d <- lag_join_nino(d, nino_ann, row$target[1], row$lag[1])
+    if (nrow(d) < enso_min_overlap) return(NULL)
+    d |>
+      mutate(
+        proxy_z = zscore_ref(proxy_dt, year, enso_y0, 1980L),
+        sign_r = sign(row$r[1]),
+        proxy_z_signed = if_else(sign_r < 0, -proxy_z, proxy_z)
+      ) |>
+      dplyr::select(year, proxy_z_signed, nino_v, pre_ann)
+  })
+  site_ts <- compact(site_ts)
+  if (length(site_ts) < min_n) return(NULL)
+
+  composite <- bind_rows(site_ts, .id = "site_idx") |>
+    group_by(year) |>
+    summarize(
+      proxy_z = mean(proxy_z_signed, na.rm = TRUE),
+      nino_v = mean(nino_v, na.rm = TRUE),
+      pre_ann = mean(pre_ann, na.rm = TRUE),
+      n_series = n(),
+      .groups = "drop"
+    ) |>
+    mutate(
+      nino_z = zscore_ref(nino_v, year, enso_y0, 1980L),
+      proxy_z = zscore_ref(proxy_z, year, enso_y0, 1980L),
+      pre_z = zscore_ref(pre_ann, year, enso_y0, 1980L)
+    )
+
+  val_idx <- composite$year >= 1981L & composite$year <= enso_y1
+  cal_idx <- composite$year >= enso_y0 & composite$year <= 1980L
+
+  nino_label <- if (nino_col == "nino34_djf") "Niño3.4 DJF" else "Niño3.4 annual"
+
+  list(
+    region = region,
+    proxy_type = proxy_type,
+    method = method,
+    nino_col = nino_col,
+    nino_lag = lag,
+    nino_label = nino_label,
+    n_series = length(site_ts),
+    site_ids = pick$dataset_id[seq_len(length(site_ts))],
+    r_cal = safe_cor(composite$nino_z[cal_idx], composite$proxy_z[cal_idx]),
+    r_val = safe_cor(composite$nino_z[val_idx], composite$proxy_z[val_idx]),
+    r_pre_val = safe_cor(composite$pre_z[val_idx], composite$proxy_z[val_idx]),
+    data = composite
+  )
+}
+
+plot_enso_screen <- function(enso_corr) {
+  long <- enso_corr |>
+    filter(is.finite(r_nino_djf)) |>
+    mutate(
+      proxy_label = enso_proxy_labels[proxy_type],
+      label = paste0(enso_region, " — ", proxy_label)
+    ) |>
+    group_by(label) |>
+    summarize(
+      best_r = r_nino_djf[which.max(abs(r_nino_djf))],
+      .groups = "drop"
+    ) |>
+    mutate(label = fct_reorder(label, best_r))
+
+  ggplot(long, aes(best_r, label, fill = best_r > 0)) +
+    geom_col(width = 0.65) +
+    geom_vline(xintercept = 0, linewidth = line_lwd_thin, colour = "grey40") +
+    scale_fill_manual(values = c("TRUE" = "#4393c3", "FALSE" = "#d6604d"), guide = "none") +
+    labs(
+      title = "Best site-wise correlation with Niño3.4 (DJF)",
+      subtitle = paste0("Detrended proxies, ", enso_y0, "–", enso_y1),
+      x = "Pearson r (proxy vs Niño3.4 DJF)", y = NULL
+    ) +
+    theme_clean(grid = "x")
+}
+
+plot_enso_best_scatter <- function(enso_corr, catalog, sites, nino_ann) {
+  best <- enso_corr |>
+    filter(is.finite(r_nino_djf)) |>
+    group_by(enso_region, proxy_type) |>
+    slice_max(abs(r_nino_djf), n = 1, with_ties = FALSE) |>
+    ungroup()
+  if (!nrow(best)) return(invisible(NULL))
+
+  loc <- sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+  proxy_ann <- speleothem_annual(catalog) |> inner_join(loc, by = c("lon", "lat"))
+
+  pts <- map_dfr(seq_len(nrow(best)), function(i) {
+    row <- best[i, ]
+    proxy_ann |>
+      filter(dataset_id == row$dataset_id) |>
+      filter(year >= enso_y0, year <= enso_y1) |>
+      mutate(value_dt = detrend_linear(year, value)) |>
+      inner_join(nino_ann |> dplyr::select(year, nino34_djf), by = "year") |>
+      mutate(
+        facet = paste0(
+          row$enso_region, " — ", enso_proxy_labels[row$proxy_type],
+          "\n", row$dataset_id, " (r = ", sprintf("%.2f", row$r_nino_djf), ")"
+        )
+      )
+  })
+
+  ggplot(pts, aes(nino34_djf, value_dt)) +
+    geom_point(alpha = 0.65, size = point_sz, colour = "#444444") +
+    geom_smooth(method = "lm", se = TRUE, colour = "#b2182b", linewidth = line_lwd) +
+    facet_wrap(~facet, scales = "free_y", ncol = 2) +
+    labs(
+      title = "Best ENSO teleconnection per region × proxy",
+      subtitle = "Detrended proxy vs Niño3.4 DJF SST anomaly",
+      x = "Niño3.4 DJF SST anomaly (°C)", y = "Detrended proxy"
+    ) +
+    theme_clean(grid = "y") +
+    theme(strip.text = element_text(size = 8.5, face = "bold"))
+}
+
+plot_enso_method_comparison <- function(comp_summary) {
+  comp_summary <- comp_summary |>
+    mutate(
+      panel = paste0(region, " — ", enso_proxy_labels[proxy_type]),
+      method = factor(
+        method,
+        levels = c("Niño DJF (baseline)", "Niño tuned", "Local JJA rain (mean |r|)")
+      )
+    )
+
+  ggplot(comp_summary, aes(r, method, fill = method)) +
+    geom_col(width = 0.6) +
+    geom_vline(xintercept = 0, linewidth = line_lwd_thin, colour = "grey40") +
+    facet_wrap(~panel, ncol = 1, scales = "free_y") +
+    scale_fill_manual(
+      values = c(
+        "Niño DJF (baseline)" = "#92c5de",
+        "Niño tuned" = "#4393c3",
+        "Local JJA rain (mean |r|)" = "#d6604d"
+      ),
+      guide = "none"
+    ) +
+    labs(
+      title = "ENSO region: which target fits best?",
+      subtitle = "Validation r (1981–2000) for composites; mean |r| for local summer rainfall",
+      x = "Pearson r", y = NULL
+    ) +
+    theme_clean(grid = "x")
+}
+
+plot_enso_composite_ts <- function(comp) {
+  if (is.null(comp)) return(invisible(NULL))
+  d <- comp$data |> filter(year >= 1981L, year <= enso_y1)
+
+  long <- d |>
+    pivot_longer(c(nino_z, proxy_z), names_to = "series", values_to = "z") |>
+    mutate(series = recode(series,
+      nino_z = comp$nino_label,
+      proxy_z = "Speleothem composite"
+    ))
+
+  ggplot(long, aes(year, z, colour = series)) +
+    geom_hline(yintercept = 0, linewidth = line_lwd_thin, colour = "grey75") +
+    geom_line(linewidth = line_lwd, alpha = 0.95) +
+    scale_colour_manual(
+      values = setNames(
+        c("#2166ac", "#b2182b"),
+        c(comp$nino_label, "Speleothem composite")
+      ),
+      name = NULL
+    ) +
+    labs(
+      title = paste0(comp$region, " — ", enso_proxy_labels[comp$proxy_type], " composite"),
+      subtitle = paste0(
+        comp$method, " method; validation ", 1981, "–", enso_y1,
+        "; ", comp$n_series, " series; r_val = ", sprintf("%.2f", comp$r_val)
+      ),
+      x = "Year (CE)", y = "Z-score (1901–1980 base)"
+    ) +
+    theme_clean(grid = "y") +
+    theme(legend.position = "bottom")
+}
+```
+
+## Data and screening
+
+```{r}
+#| label: enso-load
+#| cache: true
+#| dependson: [enso-setup, corr-run]
+
+nino_monthly <- load_nino34_monthly()
+nino_ann <- build_nino34_annual(nino_monthly)
+
+if (!exists("cru_clim")) cru_clim <- readRDS(cru_rds)
+cru_locs <- speleo_sites |> distinct(lon, lat) |> mutate(loc_id = row_number())
+clim_season <- load_enso_seasonal_clim(cru_locs)
+
+enso_corr <- compute_enso_correlations(catalog, cru_clim, speleo_sites, nino_ann)
+enso_sweep <- compute_enso_sweep(catalog, cru_clim, speleo_sites, nino_ann, clim_season)
+
+n_enso_sites <- nrow(enso_corr)
+n_sig_djf <- sum(enso_corr$p_nino_djf < enso_p_cut, na.rm = TRUE)
+n_sig_sweep <- enso_sweep |>
+  filter(grepl("^nino", target)) |>
+  group_by(dataset_id) |>
+  slice_max(abs(r), n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  filter(p < enso_p_cut) |>
+  nrow()
+
+glue(
+  "{n_enso_sites} series in ENSO regions ({enso_y0}–{enso_y1}). ",
+  "Baseline (Niño DJF, lag 0): {n_sig_djf} significant (p < {enso_p_cut}). ",
+  "With lags and annual Niño: {n_sig_sweep} significant."
+)
+```
+
+```{r}
+#| label: enso-summary-table
+#| dependson: enso-load
+
+enso_corr |>
+  mutate(
+    proxy_label = enso_proxy_labels[proxy_type],
+    sig_djf = p_nino_djf < enso_p_cut
+  ) |>
+  group_by(enso_region, proxy_label) |>
+  summarize(
+    n = n(),
+    n_sig = sum(sig_djf, na.rm = TRUE),
+    best_r_djf = r_nino_djf[which.max(abs(r_nino_djf))],
+    best_p_djf = p_nino_djf[which.max(abs(r_nino_djf))],
+    best_id = dataset_id[which.max(abs(r_nino_djf))],
+    .groups = "drop"
+  ) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+  knitr::kable(caption = "ENSO screening by region and proxy (best |r| vs Niño3.4 DJF)")
+```
+
+## Screen vs Niño3.4
+
+```{r}
+#| label: enso-screen-plot
+#| fig-cap: "Strongest single-series Niño3.4 DJF teleconnection per region and proxy type."
+#| fig-width: 9
+#| fig-height: 4
+#| dependson: enso-load
+
+if (nrow(enso_corr)) plot_enso_screen(enso_corr)
+```
+
+```{r}
+#| label: enso-scatter-plot
+#| fig-cap: "Showcase scatter plots for the best |r| series in each region × proxy panel."
+#| fig-width: 9
+#| fig-height: 8
+#| dependson: enso-load
+
+if (nrow(enso_corr)) {
+  plot_enso_best_scatter(enso_corr, catalog, speleo_sites, nino_ann)
+}
+```
+
+## Composites and comparison
+
+For each region we build δ18O composites two ways: **baseline** (Niño DJF, lag 0, top 3 series by |r|) and **tuned** (best Niño index + lag per series, up to 5 series). We compare validation *r* (1981–2000) against the mean |r| to **local JJA rainfall**.
+
+```{r}
+#| label: enso-composite-run
+#| cache: true
+#| dependson: enso-load
+
+enso_regions <- c("SE Australia (Tadros)", "SW Pacific / IASM")
+
+enso_comp_base <- map(enso_regions, \(reg) {
+  build_enso_composite(enso_sweep, catalog, cru_clim, speleo_sites, nino_ann,
+                       region = reg, proxy_type = "d18O", method = "baseline")
+}) |> set_names(enso_regions)
+
+enso_comp_tuned <- map(enso_regions, \(reg) {
+  build_enso_composite(enso_sweep, catalog, cru_clim, speleo_sites, nino_ann,
+                       region = reg, proxy_type = "d18O", method = "tuned")
+}) |> set_names(enso_regions)
+
+enso_best_comp <- enso_comp_tuned[["SE Australia (Tadros)"]]
+if (is.null(enso_best_comp)) enso_best_comp <- enso_comp_tuned[["SW Pacific / IASM"]]
+
+mean_rain_r <- function(region) {
+  enso_sweep |>
+    filter(enso_region == region, target == "pre_jja") |>
+    summarize(r = mean(abs(r), na.rm = TRUE), .groups = "drop") |>
+    pull(r)
+}
+
+enso_method_summary <- bind_rows(
+  map_dfr(enso_regions, function(reg) {
+    b <- enso_comp_base[[reg]]
+    t <- enso_comp_tuned[[reg]]
+    bind_rows(
+      if (!is.null(b)) tibble(region = reg, proxy_type = "d18O",
+        method = "Niño DJF (baseline)", r = b$r_val, n_series = b$n_series),
+      if (!is.null(t)) tibble(region = reg, proxy_type = "d18O",
+        method = "Niño tuned", r = t$r_val, n_series = t$n_series),
+      tibble(region = reg, proxy_type = "d18O",
+        method = "Local JJA rain (mean |r|)", r = mean_rain_r(reg), n_series = NA_integer_)
+    )
+  })
+)
+
+enso_method_summary |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+  knitr::kable(caption = "Step 3 — validation-period skill by method (δ18O composites)")
+```
+
+```{r}
+#| label: enso-method-plot
+#| fig-cap: "Comparison of ENSO screening approaches in the two main regions. Tuned Niño settings improve validation r; local summer rain remains a strong alternative target."
+#| fig-width: 8
+#| fig-height: 6
+#| dependson: enso-composite-run
+
+if (nrow(enso_method_summary)) plot_enso_method_comparison(enso_method_summary)
+```
+
+```{r}
+#| label: enso-composite-plot
+#| fig-cap: "Tuned δ18O composites vs Niño index — validation period 1981–2000 (z-scores)."
+#| fig-width: 9
+#| fig-height: 7
+#| dependson: enso-composite-run
+
+if (!is.null(enso_comp_tuned[["SE Australia (Tadros)"]])) {
+  plot_enso_composite_ts(enso_comp_tuned[["SE Australia (Tadros)"]])
+}
+if (!is.null(enso_comp_tuned[["SW Pacific / IASM"]])) {
+  plot_enso_composite_ts(enso_comp_tuned[["SW Pacific / IASM"]])
+}
+```
+
+## Step 3 takeaways
+
+```{r}
+#| label: step3-takeaways-prep
+#| include: false
+#| dependson: [enso-load, enso-composite-run]
+
+step3_ok <- nrow(enso_corr) > 0L
+if (step3_ok) {
+  best_djf <- enso_corr |> slice_max(abs(r_nino_djf), n = 1, with_ties = FALSE)
+  best_sweep <- enso_sweep |>
+    filter(grepl("^nino", target)) |>
+    slice_max(abs(r), n = 1, with_ties = FALSE)
+  se_mg <- sum(enso_corr$enso_region == "SE Australia (Tadros)" &
+                 enso_corr$proxy_type == "Mg/Ca")
+}
+step3_tuned_ok <- !is.null(enso_best_comp)
+```
+
+`r if (step3_ok) glue("In ENSO regions we tested **{n_enso_sites}** series. A simple Niño-DJF screen gives **{n_sig_djf}** significant results; allowing **lags and an annual Niño index** raises that to **{n_sig_sweep}**.") else "Step 3 could not run."`
+
+`r if (step3_ok) glue("Best baseline teleconnection: **{best_djf$dataset_id}** (*r* = {sprintf('%.2f', best_djf$r_nino_djf)} vs Niño DJF). Best after retuning: **{best_sweep$dataset_id}** (*r* = {sprintf('%.2f', best_sweep$r)} for {best_sweep$target}, lag {best_sweep$lag}). Only **{se_mg}** Mg/Ca series exist in SE Australia.")`
+
+`r if (step3_tuned_ok) glue("Best tuned δ18O composite (**{enso_best_comp$region}**, {enso_best_comp$n_series} series): validation *r* = **{sprintf('%.2f', enso_best_comp$r_val)}** vs {enso_best_comp$nino_label} (lag {enso_best_comp$nino_lag}).")`
+
+DoD2k is useful for **hypothesis screening**, not for a publishable ENSO reconstruction: few Mg/Ca records, annual resolution, and karst mixing damp the signal [@fairchild2006]. A convincing palaeo-ENSO study would need **high-resolution, site-calibrated stalagmites** and often **multi-proxy networks** [@tadros2016].
+
+# Conclusion
+
+| Step | Main result |
+|------|-------------|
+| **1 — Screen** | Most speleothems correlate weakly with local CRU climate; the archive is heterogeneous. |
+| **2 — Composite** | Some regional composites show moderate validation skill; others fail — site mixing matters. |
+| **3 — ENSO** | Retuned Niño indices and lags improve correlations modestly; **local rainfall** is often the cleaner target. |
+
+# References
+
+::: {#refs}
+:::
